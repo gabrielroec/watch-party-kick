@@ -110,19 +110,41 @@ export async function connectAsPublisher(params: {
       setTimeout(() => resolve(), 1500);
     });
 
-    const srcW = sourceVideo.videoWidth || 1920;
-    const srcH = sourceVideo.videoHeight || 1080;
-    // Limita a 1920x1080 mantendo aspect ratio.
-    const scale = Math.min(1920 / srcW, 1080 / srcH, 1);
+    // Canvas SEMPRE 1920x1080 (16:9) independente do source. Source e
+    // desenhado com cover-fit (preserva aspect, crop center pra preencher).
+    // Resultado: video publicado e 16:9 e bate com aspect do player Kick,
+    // viewer recebe imagem que enche 100% sem letterbox.
+    const CANVAS_W = 1920;
+    const CANVAS_H = 1080;
     const canvas = document.createElement("canvas");
-    canvas.width = Math.round(srcW * scale);
-    canvas.height = Math.round(srcH * scale);
+    canvas.width = CANVAS_W;
+    canvas.height = CANVAS_H;
     const ctx = canvas.getContext("2d", {
       alpha: false,
       desynchronized: true,
       willReadFrequently: false,
     });
     if (!ctx) throw new Error("canvas 2d context indisponivel");
+
+    // Computa dimensoes cover-fit do source dentro do canvas 16:9.
+    function computeCoverDraw(): { dx: number; dy: number; dw: number; dh: number } {
+      const sw = sourceVideo.videoWidth;
+      const sh = sourceVideo.videoHeight;
+      if (!sw || !sh) return { dx: 0, dy: 0, dw: CANVAS_W, dh: CANVAS_H };
+      const srcAspect = sw / sh;
+      const dstAspect = CANVAS_W / CANVAS_H;
+      if (srcAspect > dstAspect) {
+        // Source mais largo que 16:9 — recorta laterais
+        const dh = CANVAS_H;
+        const dw = dh * srcAspect;
+        return { dx: (CANVAS_W - dw) / 2, dy: 0, dw, dh };
+      } else {
+        // Source mais alto que 16:9 — recorta topo/base
+        const dw = CANVAS_W;
+        const dh = dw / srcAspect;
+        return { dx: 0, dy: (CANVAS_H - dh) / 2, dw, dh };
+      }
+    }
 
     let running = true;
     let timerId: number | undefined;
@@ -132,7 +154,8 @@ export async function connectAsPublisher(params: {
     function tick() {
       if (!running) return;
       if (sourceVideo.videoWidth > 0) {
-        ctx!.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
+        const { dx, dy, dw, dh } = computeCoverDraw();
+        ctx!.drawImage(sourceVideo, dx, dy, dw, dh);
       }
       n++;
       const nextTargetMs = startMs + n * FRAME_MS;

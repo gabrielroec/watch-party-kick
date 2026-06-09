@@ -30,14 +30,23 @@ function findKickPlayer(): HTMLElement | null {
     if (area > bestArea) { best = v; bestArea = area; }
   }
   if (!best) { cachedKickPlayer = null; return null; }
+  // Sobe pra encontrar o container do player (geralmente inclui controles).
+  // BUG anterior: comparava width >= bestArea/1.2 (mistura de width com area).
+  // Agora: sobe enquanto o container fica MAIOR que o video — para quando
+  // crescer demais (mais de 1.2x da area inicial), que indica que ja passou
+  // o player e entrou no container da pagina.
+  const bestWidth = best.getBoundingClientRect().width;
   let el: HTMLElement | null = best;
-  for (let i = 0; i < 4 && el; i++) {
+  let chosen: HTMLElement = best;
+  for (let i = 0; i < 6 && el; i++) {
     const r = el.getBoundingClientRect();
-    if (r.width >= bestArea / 1.2) break;
+    // Para se o container ficou muito maior que o video (saiu do player).
+    if (r.width > bestWidth * 1.5) break;
+    chosen = el;
     el = el.parentElement;
   }
-  cachedKickPlayer = el;
-  return el;
+  cachedKickPlayer = chosen;
+  return chosen;
 }
 
 // Gera o atributo 'd' do <path> dentro do <clipPath> SVG.
@@ -83,17 +92,25 @@ export function createOverlay(): OverlayHandles {
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #fff;
     }
+    .video-clip {
+      /* Wrapper que recebe o clip-path. Chromium no Windows tem bugs
+         conhecidos com clip-path em <video> + GPU compositing, mas
+         funciona em <div>. */
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      clip-path: url(#wpkCutoutClip);
+      -webkit-clip-path: url(#wpkCutoutClip);
+    }
     .screen-video {
       display: block;
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      /* cover preenche 100% do player Kick. Canvas ja tem 16:9 e fit
+         interno, entao aqui contain==fill==cover na pratica. */
+      object-fit: cover;
       background: #000;
-      /* Clip-path SVG reference defined in shadow root.
-         O proprio path comeca como rect inteiro = sem clipping aparente
-         (so o outer subpath, sem o inner — clip-rule evenodd nao muda nada). */
-      clip-path: url(#wpkCutoutClip);
-      -webkit-clip-path: url(#wpkCutoutClip);
     }
     .hud {
       position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center;
@@ -128,15 +145,17 @@ export function createOverlay(): OverlayHandles {
   const wrap = document.createElement("div");
   wrap.className = "wrap";
 
-  // SVG <clipPath> definido uma unica vez no shadow root. O atributo 'd'
-  // do <path> dentro e atualizado dinamicamente pelo applyCutout.
-  // clipPathUnits=objectBoundingBox => coordenadas 0-1 relativas ao elemento.
+  // SVG <clipPath> definido no shadow root. Chromium tem quirks com SVG
+  // de tamanho zero (width=0 height=0) — alguns versions skippam parsear
+  // <defs> internos. Usar width/height=1 + position offscreen evita isso.
+  // clipPathUnits=objectBoundingBox => coordenadas 0-1 relativas ao
+  // elemento clippado (o div .video-clip).
   const svgNs = "http://www.w3.org/2000/svg";
   const defsSvg = document.createElementNS(svgNs, "svg");
-  defsSvg.setAttribute("width", "0");
-  defsSvg.setAttribute("height", "0");
-  defsSvg.style.position = "absolute";
-  defsSvg.style.pointerEvents = "none";
+  defsSvg.setAttribute("width", "1");
+  defsSvg.setAttribute("height", "1");
+  defsSvg.setAttribute("viewBox", "0 0 1 1");
+  defsSvg.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;";
   const defs = document.createElementNS(svgNs, "defs");
   const clipPathEl = document.createElementNS(svgNs, "clipPath");
   clipPathEl.setAttribute("id", "wpkCutoutClip");
@@ -147,6 +166,10 @@ export function createOverlay(): OverlayHandles {
   clipPathEl.appendChild(clipPathPath);
   defs.appendChild(clipPathEl);
   defsSvg.appendChild(defs);
+
+  // Wrapper div que recebe o clip-path (em vez do <video> diretamente)
+  const videoClipDiv = document.createElement("div");
+  videoClipDiv.className = "video-clip";
 
   const screenVideo = document.createElement("video");
   screenVideo.className = "screen-video";
@@ -187,8 +210,14 @@ export function createOverlay(): OverlayHandles {
   const dragHandle = document.createElement("div");
   dragHandle.className = "drag-handle";
 
-  wrap.appendChild(defsSvg);
-  wrap.appendChild(screenVideo);
+  // SVG defs vai DIRETO no shadow root, antes de tudo, com size > 0
+  // pra Chromium nao skippar parsear o <clipPath>.
+  shadow.appendChild(defsSvg);
+
+  // Video dentro do wrapper que tem clip-path. Audio/HUD/buttons ficam
+  // FORA do wrapper clippado pra nao serem afetados pelo buraco.
+  videoClipDiv.appendChild(screenVideo);
+  wrap.appendChild(videoClipDiv);
   wrap.appendChild(screenAudio);
   wrap.appendChild(hud);
   wrap.appendChild(statsEl);
