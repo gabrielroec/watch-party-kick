@@ -6,7 +6,7 @@ import { DEFAULT_SCENE_LAYOUT } from "@wpk/shared";
 import { connectAsPublisher, type PublisherHandle } from "@/lib/publisher";
 import { openControlSocket } from "@/lib/controlSocket";
 
-const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:4000";
+const BACKEND_URL = "https://watchpartykick.duckdns.org";
 
 type Status = "idle" | "creating" | "connected" | "error";
 
