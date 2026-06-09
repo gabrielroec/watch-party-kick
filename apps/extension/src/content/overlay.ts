@@ -1,6 +1,17 @@
 // Overlay injetado na pagina da Kick. Mostra a tela do streamer por cima
-// do player nativo. O "buraco" (cutout) opcional torna uma regiao TRANSPARENTE
-// pra revelar a webcam nativa da Kick por baixo.
+// do player nativo. O cutout opcional cria uma area TRANSPARENTE pra revelar
+// a webcam nativa da Kick por baixo.
+//
+// Por que canvas em vez de <video> + clip-path:
+// No Chromium Windows, elementos <video> com aceleracao de hardware sao
+// promovidos pra uma Direct Composition surface ao nivel do OS, que BYPASS
+// CSS clip-path e mask-image. No Mac usa Metal compositor que respeita CSS.
+// Resultado: clip-path no <video> funciona no Mac mas e ignorado no Windows.
+//
+// Solucao bulletproof: <video> oculto receive o track LiveKit, <canvas>
+// visivel desenha cada frame e usa ctx.clearRect pra criar o "buraco" real.
+// Canvas e elemento HTML normal sem promotion pra surface, clearRect cria
+// pixels genuinamente transparentes em todas as plataformas.
 
 import type { ScreenCutout } from "@wpk/shared";
 
@@ -15,6 +26,8 @@ export interface OverlayHandles {
 }
 
 const HOST_ID = "wpk-overlay-host";
+const CANVAS_W = 1920;
+const CANVAS_H = 1080;
 
 let cachedKickPlayer: HTMLElement | null = null;
 
@@ -30,43 +43,17 @@ function findKickPlayer(): HTMLElement | null {
     if (area > bestArea) { best = v; bestArea = area; }
   }
   if (!best) { cachedKickPlayer = null; return null; }
-  // Sobe pra encontrar o container do player (geralmente inclui controles).
-  // BUG anterior: comparava width >= bestArea/1.2 (mistura de width com area).
-  // Agora: sobe enquanto o container fica MAIOR que o video — para quando
-  // crescer demais (mais de 1.2x da area inicial), que indica que ja passou
-  // o player e entrou no container da pagina.
   const bestWidth = best.getBoundingClientRect().width;
   let el: HTMLElement | null = best;
   let chosen: HTMLElement = best;
   for (let i = 0; i < 6 && el; i++) {
     const r = el.getBoundingClientRect();
-    // Para se o container ficou muito maior que o video (saiu do player).
     if (r.width > bestWidth * 1.5) break;
     chosen = el;
     el = el.parentElement;
   }
   cachedKickPlayer = chosen;
   return chosen;
-}
-
-// Gera o atributo 'd' do <path> dentro do <clipPath> SVG.
-// Coordenadas em unidades 0-1 (clipPathUnits=objectBoundingBox).
-// Dois subpaths fechados (outer + inner). clip-rule=evenodd na <path>
-// remove a area do retangulo interno, criando o buraco.
-//
-// Por que SVG <clipPath> e nao CSS polygon(evenodd, ...):
-// CSS polygon() e uma UNICA shape com pontos conectados linearmente.
-// Pular do outer pro inner cria uma linha diagonal visivel que torce o
-// formato — o "quadrado desfigurado" que o usuario reportou.
-// SVG <path> aceita multiplos subpaths "M..Z M..Z" como areas separadas
-// e clip-rule=evenodd subtrai a interna da externa corretamente.
-function makeCutoutPathD(cutout: ScreenCutout | null): string {
-  if (!cutout) return "M0 0H1V1H0Z";
-  const x1 = cutout.x.toFixed(4);
-  const y1 = cutout.y.toFixed(4);
-  const x2 = (cutout.x + cutout.w).toFixed(4);
-  const y2 = (cutout.y + cutout.h).toFixed(4);
-  return `M0 0H1V1H0Z M${x1} ${y1}H${x2}V${y2}H${x1}Z`;
 }
 
 export function createOverlay(): OverlayHandles {
@@ -84,33 +71,17 @@ export function createOverlay(): OverlayHandles {
     :host, * { box-sizing: border-box; }
     .wrap {
       position: fixed;
-      /* SEM background opaco: o cutout fica transparente quando aplicado.
-         O proprio video preenche todo o wrap quando esta tocando. */
       background: transparent;
       border-radius: 8px;
       overflow: hidden;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #fff;
     }
-    .video-clip {
-      /* Wrapper que recebe o clip-path. Chromium no Windows tem bugs
-         conhecidos com clip-path em <video> + GPU compositing, mas
-         funciona em <div>. */
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      clip-path: url(#wpkCutoutClip);
-      -webkit-clip-path: url(#wpkCutoutClip);
-    }
-    .screen-video {
+    .screen-canvas {
       display: block;
       width: 100%;
       height: 100%;
-      /* cover preenche 100% do player Kick. Canvas ja tem 16:9 e fit
-         interno, entao aqui contain==fill==cover na pratica. */
-      object-fit: cover;
-      background: #000;
+      background: transparent;
     }
     .hud {
       position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center;
@@ -145,40 +116,30 @@ export function createOverlay(): OverlayHandles {
   const wrap = document.createElement("div");
   wrap.className = "wrap";
 
-  // SVG <clipPath> definido no shadow root. Chromium tem quirks com SVG
-  // de tamanho zero (width=0 height=0) — alguns versions skippam parsear
-  // <defs> internos. Usar width/height=1 + position offscreen evita isso.
-  // clipPathUnits=objectBoundingBox => coordenadas 0-1 relativas ao
-  // elemento clippado (o div .video-clip).
-  const svgNs = "http://www.w3.org/2000/svg";
-  const defsSvg = document.createElementNS(svgNs, "svg");
-  defsSvg.setAttribute("width", "1");
-  defsSvg.setAttribute("height", "1");
-  defsSvg.setAttribute("viewBox", "0 0 1 1");
-  defsSvg.style.cssText = "position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;pointer-events:none;";
-  const defs = document.createElementNS(svgNs, "defs");
-  const clipPathEl = document.createElementNS(svgNs, "clipPath");
-  clipPathEl.setAttribute("id", "wpkCutoutClip");
-  clipPathEl.setAttribute("clipPathUnits", "objectBoundingBox");
-  const clipPathPath = document.createElementNS(svgNs, "path");
-  clipPathPath.setAttribute("d", makeCutoutPathD(null));
-  clipPathPath.setAttribute("clip-rule", "evenodd");
-  clipPathEl.appendChild(clipPathPath);
-  defs.appendChild(clipPathEl);
-  defsSvg.appendChild(defs);
-
-  // Wrapper div que recebe o clip-path (em vez do <video> diretamente)
-  const videoClipDiv = document.createElement("div");
-  videoClipDiv.className = "video-clip";
-
+  // <video> OCULTO: LiveKit faz attach aqui pra decodar o stream, mas o
+  // browser nao mostra (offscreen). O canvas desenha os frames decodados.
   const screenVideo = document.createElement("video");
-  screenVideo.className = "screen-video";
   screenVideo.autoplay = true;
   screenVideo.playsInline = true;
   screenVideo.muted = true;
   screenVideo.disablePictureInPicture = true;
   screenVideo.disableRemotePlayback = true;
   (screenVideo as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
+  // Offscreen mas IN-TREE pra browser continuar decodando frames.
+  screenVideo.style.cssText =
+    "position:absolute;left:-9999px;top:-9999px;width:1920px;height:1080px;pointer-events:none;opacity:0;";
+
+  // <canvas> VISIVEL: redraw em rAF, drawImage(video) + clearRect(cutout).
+  // alpha=true permite pixels transparentes via clearRect.
+  const screenCanvas = document.createElement("canvas");
+  screenCanvas.className = "screen-canvas";
+  screenCanvas.width = CANVAS_W;
+  screenCanvas.height = CANVAS_H;
+  const ctx = screenCanvas.getContext("2d", {
+    alpha: true,
+    desynchronized: true,
+  });
+  if (!ctx) throw new Error("canvas 2d context indisponivel");
 
   const screenAudio = document.createElement("audio");
   screenAudio.autoplay = true;
@@ -210,14 +171,8 @@ export function createOverlay(): OverlayHandles {
   const dragHandle = document.createElement("div");
   dragHandle.className = "drag-handle";
 
-  // SVG defs vai DIRETO no shadow root, antes de tudo, com size > 0
-  // pra Chromium nao skippar parsear o <clipPath>.
-  shadow.appendChild(defsSvg);
-
-  // Video dentro do wrapper que tem clip-path. Audio/HUD/buttons ficam
-  // FORA do wrapper clippado pra nao serem afetados pelo buraco.
-  videoClipDiv.appendChild(screenVideo);
-  wrap.appendChild(videoClipDiv);
+  wrap.appendChild(screenVideo);
+  wrap.appendChild(screenCanvas);
   wrap.appendChild(screenAudio);
   wrap.appendChild(hud);
   wrap.appendChild(statsEl);
@@ -226,6 +181,32 @@ export function createOverlay(): OverlayHandles {
   wrap.appendChild(muteBtn);
   shadow.appendChild(wrap);
 
+  // ---- rAF loop: drawImage video -> canvas, clearRect cutout ----
+  let currentCutout: ScreenCutout | null = null;
+  let rafId = 0;
+  let alive = true;
+
+  function drawLoop() {
+    if (!alive) return;
+    rafId = requestAnimationFrame(drawLoop);
+    const vw = screenVideo.videoWidth;
+    const vh = screenVideo.videoHeight;
+    if (vw === 0 || vh === 0) return;
+    // Canvas e video sao ambos 16:9 (publisher forca 1920x1080). Stretch.
+    ctx!.drawImage(screenVideo, 0, 0, CANVAS_W, CANVAS_H);
+    if (currentCutout) {
+      // clearRect cria pixels com alpha=0 — buraco real, ve a Kick por baixo.
+      ctx!.clearRect(
+        currentCutout.x * CANVAS_W,
+        currentCutout.y * CANVAS_H,
+        currentCutout.w * CANVAS_W,
+        currentCutout.h * CANVAS_H,
+      );
+    }
+  }
+  rafId = requestAnimationFrame(drawLoop);
+
+  // ---- Posicionamento sobre o player Kick ----
   let lastX = -1, lastY = -1, lastW = -1, lastH = -1;
   function positionOverPlayer() {
     const player = findKickPlayer();
@@ -276,7 +257,7 @@ export function createOverlay(): OverlayHandles {
   const mo = new MutationObserver(schedulePosition);
   mo.observe(playerRoot, { childList: true, subtree: false, attributes: true, attributeFilter: ["style", "class"] });
 
-  // Drag em modo PiP
+  // ---- Drag em modo PiP ----
   let dragging = false;
   let dragStartX = 0, dragStartY = 0, dragStartLeft = 0, dragStartTop = 0;
   dragHandle.addEventListener("mousedown", (e) => {
@@ -297,10 +278,8 @@ export function createOverlay(): OverlayHandles {
   closeBtn.addEventListener("click", () => destroy());
 
   function applyCutout(cutout: ScreenCutout | null) {
-    // So muda o atributo 'd' do path dentro do <clipPath>. O CSS clip-path
-    // url(#wpkCutoutClip) ja esta aplicado e nao muda. Animacao via SMIL nao,
-    // mas a UI da Kick e o player sao estaticos o suficiente pra parecer instantaneo.
-    clipPathPath.setAttribute("d", makeCutoutPathD(cutout));
+    currentCutout = cutout;
+    // rAF loop le essa variavel — atualizacao e instantanea no proximo frame.
   }
 
   function updateStats(fps: number, ping: number, dropped = 0, w = 0, h = 0) {
@@ -315,6 +294,8 @@ export function createOverlay(): OverlayHandles {
   }
 
   function destroy() {
+    alive = false;
+    cancelAnimationFrame(rafId);
     ro.disconnect();
     mo.disconnect();
     host.remove();
