@@ -9,3 +9,9 @@ build
 .DS_Store
 apps/extension/dist
 .vercel
+tsconfig.tsbuildinfo
+*.pem
+*.key
+*.key.pub
+ssh-key-*
+LightsailDefaultKey-*
