@@ -96,9 +96,13 @@ export async function connectAsPublisher(params: {
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
-        source: Track.Source.ScreenShare,
-        // H264 ativa HW encode no streamer + HW decode no viewer. VP8 nao tem
-        // HW decode no desktop e cai em libvpx software ~30fps cap em 1080p.
+        // HACK proposital: publica como Camera em vez de ScreenShare. Chromium
+        // aplica um cap interno de framerate diferente pra ScreenShare (BWE +
+        // content adapter agressivos). Marcando como Camera, o encoder roda
+        // sem essas restricoes e destrava FPS. A extensao roteia por NOME
+        // ("wpk-screen"), nao por source, entao nao quebra nada.
+        source: Track.Source.Camera,
+        // H264 ativa HW encode no streamer + HW decode no viewer (universal).
         videoCodec: "h264",
         videoEncoding: { maxBitrate: 6_000_000, maxFramerate: 60, priority: "high" as any },
         simulcast: false,

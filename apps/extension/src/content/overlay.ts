@@ -40,18 +40,24 @@ function findKickPlayer(): HTMLElement | null {
   return el;
 }
 
-// Gera a URL de mask SVG dinamica: branco = visivel, preto = transparente.
-// Coordenadas em porcentagem (0-100).
+// Gera a URL de mask SVG dinamica como um "donut": area externa preenchida
+// (alpha=1, mostra video), area do retangulo TRANSPARENTE (alpha=0, esconde
+// video, deixa a Kick aparecer por baixo). evenodd cria o buraco a partir do
+// path com 2 subpaths CW.
+//
+// Importante: usamos alpha (nao luminance). O default do mask-image pra SVG
+// usado como imagem e alpha (match-source). Antes a mask era branco/preto
+// solidos com alpha=1 nos dois => mostrava tudo, sem buraco.
 function makeCutoutMaskUrl(cutout: ScreenCutout | null): string {
   if (!cutout) return "";
-  const X = (cutout.x * 100).toFixed(2);
-  const Y = (cutout.y * 100).toFixed(2);
-  const W = (cutout.w * 100).toFixed(2);
-  const H = (cutout.h * 100).toFixed(2);
+  const x1 = (cutout.x * 100).toFixed(2);
+  const y1 = (cutout.y * 100).toFixed(2);
+  const x2 = ((cutout.x + cutout.w) * 100).toFixed(2);
+  const y2 = ((cutout.y + cutout.h) * 100).toFixed(2);
+  const path = `M0 0H100V100H0Z M${x1} ${y1}H${x2}V${y2}H${x1}Z`;
   const svg =
     `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>` +
-    `<rect width='100' height='100' fill='white'/>` +
-    `<rect x='${X}' y='${Y}' width='${W}' height='${H}' fill='black'/>` +
+    `<path d='${path}' fill='black' fill-rule='evenodd'/>` +
     `</svg>`;
   return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
 }

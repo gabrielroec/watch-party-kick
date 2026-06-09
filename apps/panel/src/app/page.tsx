@@ -10,12 +10,26 @@ const BACKEND_URL = "https://watchpartykick.duckdns.org";
 
 type Status = "idle" | "creating" | "connected" | "error";
 
-// Coordenadas em pixels do retangulo sendo desenhado (relativos ao container do preview).
-interface DraftRect {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
+type Handle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
+type Mode =
+  | { kind: "idle" }
+  | { kind: "draw"; startX: number; startY: number }
+  | { kind: "move"; startX: number; startY: number; orig: ScreenCutout }
+  | { kind: "resize"; handle: Handle; startX: number; startY: number; orig: ScreenCutout };
+
+function clamp01(v: number) { return Math.max(0, Math.min(1, v)); }
+
+function normalize(rect: ScreenCutout): ScreenCutout {
+  // Garante x/y >= 0 e w/h positivos.
+  let { x, y, w, h } = rect;
+  if (w < 0) { x += w; w = -w; }
+  if (h < 0) { y += h; h = -h; }
+  // Limita ao box [0,1]
+  if (x < 0) { w += x; x = 0; }
+  if (y < 0) { h += y; y = 0; }
+  if (x + w > 1) { w = 1 - x; }
+  if (y + h > 1) { h = 1 - y; }
+  return { x: clamp01(x), y: clamp01(y), w: Math.max(0, w), h: Math.max(0, h) };
 }
 
 export default function PanelPage() {
@@ -28,12 +42,9 @@ export default function PanelPage() {
 
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
 
-  // Cutout normalizado (0-1) que vai pro viewer via WS.
+  // Cutout normalizado (0-1). Persiste ate o usuario apagar.
   const [cutout, setCutout] = useState<ScreenCutout | null>(null);
-  // Modo desenho — quando ON, mouse drag no preview cria o cutout.
-  const [drawMode, setDrawMode] = useState(false);
-  const [draftRect, setDraftRect] = useState<DraftRect | null>(null);
-  const draftRef = useRef<{ startX: number; startY: number } | null>(null);
+  const [mode, setMode] = useState<Mode>({ kind: "idle" });
 
   const publisherRef = useRef<PublisherHandle | null>(null);
   const wsRef = useRef<ReturnType<typeof openControlSocket> | null>(null);
@@ -145,53 +156,98 @@ export default function PanelPage() {
     return () => { ws.close(); wsRef.current = null; };
   }, [session]);
 
-  // Envia cutout pro backend sempre que muda (debounce minimo via React state).
+  // Envia cutout pro backend sempre que muda.
   useEffect(() => {
     if (!wsRef.current || !session) return;
     wsRef.current.send({ type: "cutout", cutout });
   }, [cutout, session]);
 
-  // ---- Cutout drawing (mouse events no preview container) ----
-  const onPreviewMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!drawMode || !previewContainerRef.current) return;
-    const rect = previewContainerRef.current.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    draftRef.current = { startX: x, startY: y };
-    setDraftRect({ x, y, w: 0, h: 0 });
-  }, [drawMode]);
+  // ---------- Editor do cutout ----------
 
-  const onPreviewMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!draftRef.current || !previewContainerRef.current) return;
-    const rect = previewContainerRef.current.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    const { startX, startY } = draftRef.current;
-    setDraftRect({
-      x: Math.min(startX, cx),
-      y: Math.min(startY, cy),
-      w: Math.abs(cx - startX),
-      h: Math.abs(cy - startY),
-    });
-  }, []);
+  // Conversao pixel -> normalizado (0-1) relativa ao container do preview.
+  function pxToNorm(px: number, py: number) {
+    const el = previewContainerRef.current;
+    if (!el) return { x: 0, y: 0 };
+    const r = el.getBoundingClientRect();
+    return { x: (px - r.left) / r.width, y: (py - r.top) / r.height };
+  }
 
-  const onPreviewMouseUp = useCallback(() => {
-    if (!draftRef.current || !previewContainerRef.current || !draftRect) return;
-    const rect = previewContainerRef.current.getBoundingClientRect();
-    // Normaliza 0-1 relativo ao container 16:9 do preview.
-    if (draftRect.w > 8 && draftRect.h > 8) {
-      const normalized: ScreenCutout = {
-        x: draftRect.x / rect.width,
-        y: draftRect.y / rect.height,
-        w: draftRect.w / rect.width,
-        h: draftRect.h / rect.height,
-      };
-      setCutout(normalized);
+  function onContainerMouseDown(e: React.MouseEvent) {
+    if (!screenStream) return;
+    const { x, y } = pxToNorm(e.clientX, e.clientY);
+
+    // Se ja tem cutout, checa se clicou dentro dele -> move; senao -> redesenha.
+    if (cutout) {
+      const inside = x >= cutout.x && x <= cutout.x + cutout.w && y >= cutout.y && y <= cutout.y + cutout.h;
+      if (inside) {
+        setMode({ kind: "move", startX: x, startY: y, orig: cutout });
+        e.preventDefault();
+        return;
+      }
     }
-    draftRef.current = null;
-    setDraftRect(null);
-    setDrawMode(false);
-  }, [draftRect]);
+    // Comecar a desenhar novo retangulo
+    setCutout({ x, y, w: 0, h: 0 });
+    setMode({ kind: "draw", startX: x, startY: y });
+    e.preventDefault();
+  }
+
+  function onHandleMouseDown(handle: Handle, e: React.MouseEvent) {
+    if (!cutout) return;
+    const { x, y } = pxToNorm(e.clientX, e.clientY);
+    setMode({ kind: "resize", handle, startX: x, startY: y, orig: cutout });
+    e.preventDefault();
+    e.stopPropagation();
+  }
+
+  // Global mouse move/up enquanto edita
+  useEffect(() => {
+    if (mode.kind === "idle") return;
+
+    function onMove(ev: MouseEvent) {
+      const { x, y } = pxToNorm(ev.clientX, ev.clientY);
+      if (mode.kind === "draw") {
+        const nx = Math.min(mode.startX, x);
+        const ny = Math.min(mode.startY, y);
+        const nw = Math.abs(x - mode.startX);
+        const nh = Math.abs(y - mode.startY);
+        setCutout(normalize({ x: nx, y: ny, w: nw, h: nh }));
+      } else if (mode.kind === "move") {
+        const dx = x - mode.startX;
+        const dy = y - mode.startY;
+        setCutout(normalize({
+          x: mode.orig.x + dx,
+          y: mode.orig.y + dy,
+          w: mode.orig.w,
+          h: mode.orig.h,
+        }));
+      } else if (mode.kind === "resize") {
+        const { handle, orig, startX, startY } = mode;
+        const dx = x - startX;
+        const dy = y - startY;
+        let { x: nx, y: ny, w: nw, h: nh } = orig;
+        if (handle.includes("w")) { nx = orig.x + dx; nw = orig.w - dx; }
+        if (handle.includes("e")) { nw = orig.w + dx; }
+        if (handle.includes("n")) { ny = orig.y + dy; nh = orig.h - dy; }
+        if (handle.includes("s")) { nh = orig.h + dy; }
+        setCutout(normalize({ x: nx, y: ny, w: nw, h: nh }));
+      }
+    }
+
+    function onUp() {
+      if (mode.kind === "draw" && cutout && (cutout.w < 0.01 || cutout.h < 0.01)) {
+        // Click sem drag (ou drag minimo) — desfaz
+        setCutout(null);
+      }
+      setMode({ kind: "idle" });
+    }
+
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [mode, cutout]);
 
   // Cleanup
   useEffect(() => {
@@ -202,17 +258,22 @@ export default function PanelPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Visualizacao do cutout aplicado (preview do que o viewer vai ver).
-  const appliedRect = (() => {
+  // Retangulo aplicado em pixels pra rendering.
+  const appliedPx = (() => {
     if (!cutout || !previewContainerRef.current) return null;
-    const rect = previewContainerRef.current.getBoundingClientRect();
+    const r = previewContainerRef.current.getBoundingClientRect();
     return {
-      x: cutout.x * rect.width,
-      y: cutout.y * rect.height,
-      w: cutout.w * rect.width,
-      h: cutout.h * rect.height,
+      x: cutout.x * r.width,
+      y: cutout.y * r.height,
+      w: cutout.w * r.width,
+      h: cutout.h * r.height,
     };
   })();
+
+  const cursor: React.CSSProperties["cursor"] =
+    mode.kind === "draw" ? "crosshair" :
+    mode.kind === "move" ? "grabbing" :
+    "default";
 
   return (
     <main style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
@@ -256,10 +317,7 @@ export default function PanelPage() {
           <div>
             <div
               ref={previewContainerRef}
-              onMouseDown={onPreviewMouseDown}
-              onMouseMove={onPreviewMouseMove}
-              onMouseUp={onPreviewMouseUp}
-              onMouseLeave={onPreviewMouseUp}
+              onMouseDown={onContainerMouseDown}
               style={{
                 aspectRatio: "16/9",
                 background: "#0a0b0f",
@@ -267,8 +325,9 @@ export default function PanelPage() {
                 borderRadius: 12,
                 overflow: "hidden",
                 position: "relative",
-                cursor: drawMode ? "crosshair" : "default",
+                cursor,
                 userSelect: "none",
+                touchAction: "none",
               }}
             >
               <video
@@ -278,6 +337,7 @@ export default function PanelPage() {
                 style={{
                   width: "100%", height: "100%", objectFit: "contain",
                   display: screenStream ? "block" : "none",
+                  pointerEvents: "none",
                 }}
               />
               {!screenStream && (
@@ -289,35 +349,55 @@ export default function PanelPage() {
                 </div>
               )}
 
-              {/* Retangulo sendo desenhado em tempo real */}
-              {draftRect && (
+              {/* Retangulo do cutout (persistente; arrastavel e redimensionavel) */}
+              {appliedPx && (
                 <div style={{
                   position: "absolute",
-                  left: draftRect.x, top: draftRect.y,
-                  width: draftRect.w, height: draftRect.h,
-                  border: "2px dashed #2dd879",
-                  background: "rgba(45,216,121,0.15)",
-                  pointerEvents: "none",
-                }} />
-              )}
-
-              {/* Cutout aplicado (sempre visivel quando ha cutout) */}
-              {appliedRect && !draftRect && (
-                <div style={{
-                  position: "absolute",
-                  left: appliedRect.x, top: appliedRect.y,
-                  width: appliedRect.w, height: appliedRect.h,
+                  left: appliedPx.x, top: appliedPx.y,
+                  width: appliedPx.w, height: appliedPx.h,
                   border: "2px solid #2dd879",
-                  background: "rgba(45,216,121,0.08)",
-                  pointerEvents: "none",
-                  boxShadow: "0 0 0 9999px rgba(0,0,0,0.35)",
+                  background: "rgba(45,216,121,0.10)",
+                  boxShadow: "0 0 0 9999px rgba(0,0,0,0.30)",
+                  cursor: mode.kind === "move" ? "grabbing" : "grab",
                 }}>
+                  {/* Handles de resize nas 8 direcoes */}
+                  {(["nw","n","ne","e","se","s","sw","w"] as Handle[]).map((h) => {
+                    const isCorner = h.length === 2;
+                    const size = 12;
+                    const half = size / 2;
+                    let left: string | undefined, top: string | undefined, right: string | undefined, bottom: string | undefined;
+                    let cur: string = "";
+                    if (h.includes("n")) { top = `-${half}px`; cur = h === "n" ? "ns-resize" : ""; }
+                    if (h.includes("s")) { bottom = `-${half}px`; cur = h === "s" ? "ns-resize" : ""; }
+                    if (h.includes("w")) { left = `-${half}px`; cur = h === "w" ? "ew-resize" : ""; }
+                    if (h.includes("e")) { right = `-${half}px`; cur = h === "e" ? "ew-resize" : ""; }
+                    if (!h.includes("n") && !h.includes("s")) { top = `calc(50% - ${half}px)`; }
+                    if (!h.includes("w") && !h.includes("e")) { left = `calc(50% - ${half}px)`; }
+                    if (h === "nw" || h === "se") cur = "nwse-resize";
+                    if (h === "ne" || h === "sw") cur = "nesw-resize";
+                    return (
+                      <div
+                        key={h}
+                        onMouseDown={(e) => onHandleMouseDown(h, e)}
+                        style={{
+                          position: "absolute",
+                          width: size, height: size,
+                          left, top, right, bottom,
+                          background: "#2dd879",
+                          border: "2px solid #0e0f13",
+                          borderRadius: isCorner ? 2 : 3,
+                          cursor: cur,
+                          zIndex: 2,
+                        }}
+                      />
+                    );
+                  })}
                   <div style={{
                     position: "absolute", bottom: -22, left: 0, fontSize: 11,
                     background: "#2dd879", color: "#0b2a18", padding: "2px 6px",
-                    borderRadius: 4, fontWeight: 600,
+                    borderRadius: 4, fontWeight: 600, whiteSpace: "nowrap",
                   }}>
-                    BURACO DA WEBCAM (viewer ve a Kick por baixo)
+                    BURACO DA WEBCAM (arraste / redimensione)
                   </div>
                 </div>
               )}
@@ -332,26 +412,17 @@ export default function PanelPage() {
                   Sem som
                 </button>
               )}
-              <button
-                onClick={() => setDrawMode((v) => !v)}
-                disabled={!screenStream}
-                className={drawMode ? "primary" : undefined}
-                title="Desenhe um retangulo onde a webcam da Kick deve aparecer"
-              >
-                {drawMode ? "Desenhando... (clique e arraste)" : cutout ? "Redesenhar buraco da webcam" : "Marcar buraco da webcam"}
-              </button>
               {cutout && (
-                <button onClick={() => setCutout(null)} style={{ fontSize: 12 }}>
+                <button onClick={() => setCutout(null)}>
                   Remover buraco
                 </button>
               )}
             </div>
 
             <p style={{ fontSize: 12, opacity: 0.7, marginTop: 8, maxWidth: 700 }}>
-              Como funciona: o overlay da extensao mostra sua tela compartilhada por cima do player da Kick.
-              Marque um retangulo onde a sua webcam fica na live da Kick — esse pedaco fica TRANSPARENTE no
-              overlay, e os viewers veem a webcam nativa da Kick por baixo. Resultado: zero CPU gasto com
-              webcam, 100% do encoder no video.
+              <strong>Como funciona:</strong> clique e arraste no preview pra desenhar o buraco onde a webcam aparece na sua live da Kick.
+              Depois pode arrastar pra mover, ou puxar os pontos verdes nos cantos pra redimensionar.
+              O viewer ve o buraco transparente e a webcam da Kick por baixo. Zero CPU gasto com webcam, 100% no encoder.
             </p>
           </div>
 
