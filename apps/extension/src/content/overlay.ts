@@ -40,26 +40,24 @@ function findKickPlayer(): HTMLElement | null {
   return el;
 }
 
-// Gera a URL de mask SVG dinamica como um "donut": area externa preenchida
-// (alpha=1, mostra video), area do retangulo TRANSPARENTE (alpha=0, esconde
-// video, deixa a Kick aparecer por baixo). evenodd cria o buraco a partir do
-// path com 2 subpaths CW.
+// Gera clip-path polygon com fill-rule evenodd: outer + inner em uma unica
+// shape. evenodd corta o retangulo interno como "buraco" do clipping.
 //
-// Importante: usamos alpha (nao luminance). O default do mask-image pra SVG
-// usado como imagem e alpha (match-source). Antes a mask era branco/preto
-// solidos com alpha=1 nos dois => mostrava tudo, sem buraco.
-function makeCutoutMaskUrl(cutout: ScreenCutout | null): string {
-  if (!cutout) return "";
+// Por que clip-path e nao mask-image: Chromium no Windows tem bugs conhecidos
+// com mask-image em <video> com aceleracao de hardware — a mask nao renderiza
+// no path GPU compositing. clip-path com polygon evenodd e implementado no
+// nivel do compositor e funciona consistentemente em Mac/Windows/Linux.
+function makeCutoutClipPath(cutout: ScreenCutout | null): string {
+  if (!cutout) return "none";
   const x1 = (cutout.x * 100).toFixed(2);
   const y1 = (cutout.y * 100).toFixed(2);
   const x2 = ((cutout.x + cutout.w) * 100).toFixed(2);
   const y2 = ((cutout.y + cutout.h) * 100).toFixed(2);
-  const path = `M0 0H100V100H0Z M${x1} ${y1}H${x2}V${y2}H${x1}Z`;
-  const svg =
-    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>` +
-    `<path d='${path}' fill='black' fill-rule='evenodd'/>` +
-    `</svg>`;
-  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+  return (
+    `polygon(evenodd, ` +
+    `0% 0%, 100% 0%, 100% 100%, 0% 100%, ` +
+    `${x1}% ${y1}%, ${x1}% ${y2}%, ${x2}% ${y2}%, ${x2}% ${y1}%)`
+  );
 }
 
 export function createOverlay(): OverlayHandles {
@@ -91,7 +89,7 @@ export function createOverlay(): OverlayHandles {
       height: 100%;
       object-fit: contain;
       background: #000;
-      transition: -webkit-mask-image 80ms linear, mask-image 80ms linear;
+      transition: clip-path 80ms linear, -webkit-clip-path 80ms linear;
     }
     .hud {
       position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center;
@@ -245,14 +243,9 @@ export function createOverlay(): OverlayHandles {
   closeBtn.addEventListener("click", () => destroy());
 
   function applyCutout(cutout: ScreenCutout | null) {
-    const url = makeCutoutMaskUrl(cutout);
-    // Aplica em ambos prefixos pra cobrir Chromium e Safari.
-    screenVideo.style.maskImage = url;
-    (screenVideo.style as CSSStyleDeclaration & { webkitMaskImage?: string }).webkitMaskImage = url;
-    screenVideo.style.maskSize = "100% 100%";
-    (screenVideo.style as CSSStyleDeclaration & { webkitMaskSize?: string }).webkitMaskSize = "100% 100%";
-    screenVideo.style.maskRepeat = "no-repeat";
-    (screenVideo.style as CSSStyleDeclaration & { webkitMaskRepeat?: string }).webkitMaskRepeat = "no-repeat";
+    const clip = makeCutoutClipPath(cutout);
+    screenVideo.style.clipPath = clip;
+    (screenVideo.style as CSSStyleDeclaration & { webkitClipPath?: string }).webkitClipPath = clip;
   }
 
   function updateStats(fps: number, ping: number, dropped = 0, w = 0, h = 0) {

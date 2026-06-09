@@ -108,13 +108,28 @@ export default function PanelPage() {
       const track = stream.getVideoTracks()[0];
       if (!track) { stream.getTracks().forEach((t) => t.stop()); setBusy(null); return; }
 
+      // BLOQUEIO: Chrome tem cap hard de 30fps em window/screen capture.
+      // So tab capture (displaySurface='browser') vai pelo pipeline de 60fps.
+      // Sem isso, FPS sempre tem teto 30 e o problema do usuario nunca some.
       const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string };
       if (settings.displaySurface && settings.displaySurface !== "browser") {
+        stream.getTracks().forEach((t) => t.stop());
         setErrorMsg(
-          `Atencao: voce escolheu '${settings.displaySurface}'. Chrome limita janela/tela a 30fps. ` +
-          `Pra 60fps, compartilhe uma ABA do Chrome.`,
+          `Voce escolheu "${settings.displaySurface}", que o Chrome limita a 30fps. ` +
+          `Pra 60fps escolha "Aba do Chrome" no picker e selecione a aba com o conteudo.`,
         );
+        setBusy(null);
+        return;
       }
+
+      // Verifica capabilities: se reportar maxFrameRate < 60, o picker bugou.
+      try {
+        const caps = (track.getCapabilities?.() ?? {}) as MediaTrackCapabilities;
+        const fpsMax = (caps as { frameRate?: { max?: number } }).frameRate?.max;
+        if (fpsMax != null && fpsMax < 60) {
+          console.warn(`[panel] capabilities reportam maxFrameRate=${fpsMax}; cap pode estar ativo`);
+        }
+      } catch { /* noop */ }
 
       track.addEventListener("ended", () => {
         setScreenStream(null);
@@ -418,6 +433,17 @@ export default function PanelPage() {
                 </button>
               )}
             </div>
+
+            {!screenStream && (
+              <div style={{
+                marginTop: 12, padding: 12,
+                background: "#1a2a18", border: "1px solid #2dd879", borderRadius: 8, fontSize: 13,
+              }}>
+                <strong style={{ color: "#2dd879" }}>Importante para 60fps:</strong> no picker que aparecer,
+                escolha <strong>"Aba do Chrome"</strong> (NAO "Janela" nem "Tela inteira"). O Chrome trava a
+                captura de janela/tela em 30fps; so a aba consegue 60fps.
+              </div>
+            )}
 
             <p style={{ fontSize: 12, opacity: 0.7, marginTop: 8, maxWidth: 700 }}>
               <strong>Como funciona:</strong> clique e arraste no preview pra desenhar o buraco onde a webcam aparece na sua live da Kick.
