@@ -15,6 +15,12 @@ export interface PublisherHandle {
   disconnect: () => Promise<void>;
 }
 
+// Chromium's BitrateAllocator usa razao 1:2:4:8 entre prioridades very-low/low/
+// medium/high. Marcar screen='high' e webcam='very-low' faz o BWE dar 8x mais
+// budget pra tela e degradar a webcam primeiro quando aperta — em vez de cortar
+// FPS dos dois igualmente (que era o que acontecia).
+type TrackKind = "screen" | "webcam";
+
 export async function connectAsPublisher(params: {
   url: string;
   token: string;
@@ -44,19 +50,34 @@ export async function connectAsPublisher(params: {
     }
   }
 
-  // Aplica params estaveis no sender: bitrate sustentavel + degradation que
-  // SACRIFICA resolucao pra manter framerate. "disabled" era o killer principal.
-  async function applyStableParams(pub: any, opts: { maxBitrate: number; maxFramerate: number }) {
+  // Aplica params assimetricos: screen pinada em resolucao (mantem 1080p e
+  // sacrifica fps em ultimo caso), webcam sem lock de resolucao (downscala
+  // pra 480p/360p se precisar manter framerate). priority='very-low' na
+  // webcam faz o BWE retirar bitrate dela ANTES de mexer na screen.
+  async function applyStableParams(
+    pub: any,
+    opts: { kind: TrackKind; maxBitrate: number; maxFramerate: number },
+  ) {
     try {
       const sender = pub.track?.sender;
       if (!sender) return;
-      const params = sender.getParameters();
-      if (params.encodings?.[0]) {
-        params.encodings[0].maxBitrate = opts.maxBitrate;
-        params.encodings[0].maxFramerate = opts.maxFramerate;
-        params.encodings[0].scaleResolutionDownBy = 1.0;
-        params.degradationPreference = "maintain-framerate";
-        await sender.setParameters(params);
+      const p = sender.getParameters();
+      if (p.encodings?.[0]) {
+        p.encodings[0].maxBitrate = opts.maxBitrate;
+        p.encodings[0].maxFramerate = opts.maxFramerate;
+        // Web priorities sao mapeadas pelo Chromium pra bitrate weight (1:2:4:8)
+        p.encodings[0].priority = opts.kind === "screen" ? "high" : "very-low";
+        p.encodings[0].networkPriority = opts.kind === "screen" ? "high" : "very-low";
+        if (opts.kind === "screen") {
+          // Mantem 1080p mesmo sob pressao — sacrifica fps so se nao tiver jeito
+          p.encodings[0].scaleResolutionDownBy = 1.0;
+          p.degradationPreference = "maintain-resolution";
+        } else {
+          // Webcam pode downscalar; o que importa eh nao engasgar
+          delete p.encodings[0].scaleResolutionDownBy;
+          p.degradationPreference = "maintain-framerate";
+        }
+        await sender.setParameters(p);
       }
     } catch (e) {
       console.warn("[publisher] applyStableParams failed", e);
@@ -68,11 +89,8 @@ export async function connectAsPublisher(params: {
 
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      // 'detail' otimiza pra texto/UI; "motion" jogaria CPU em blur desnecessario
       videoTrack.contentHint = "detail";
 
-      // Sem 'min' — getDisplayMedia/applyConstraints lancam OverconstrainedError
-      // silenciosamente se nao bater, deixando o track em estado degradado.
       await videoTrack.applyConstraints({
         width: { ideal: 1920 },
         height: { ideal: 1080 },
@@ -82,14 +100,12 @@ export async function connectAsPublisher(params: {
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
-        // Source.Camera é hack proposital: contorna o limite de 15fps que o
-        // Chromium aplica a ScreenShare. NAO trocar pra ScreenShare.
         source: Track.Source.Camera,
-        videoEncoding: { maxBitrate: 8_000_000, maxFramerate: 60 },
+        videoEncoding: { maxBitrate: 8_000_000, maxFramerate: 60, priority: "high" as any },
         simulcast: false,
       });
       screenVideoSid = pub.trackSid;
-      await applyStableParams(pub, { maxBitrate: 8_000_000, maxFramerate: 60 });
+      await applyStableParams(pub, { kind: "screen", maxBitrate: 8_000_000, maxFramerate: 60 });
     }
 
     const audioTrack = stream.getAudioTracks()[0];
@@ -116,23 +132,23 @@ export async function connectAsPublisher(params: {
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
       videoTrack.contentHint = "motion";
+      // 480p30 corta a area de macroblocks em ~2.25x vs 720p30 e libera CPU
+      // do encoder da webcam pra screen encoder. Bitrate proporcional.
       await videoTrack.applyConstraints({
-        width: { ideal: 1280 },
-        height: { ideal: 720 },
-        frameRate: { ideal: 30 },
+        width: { ideal: 854, max: 854 },
+        height: { ideal: 480, max: 480 },
+        frameRate: { ideal: 30, max: 30 },
       }).catch((e) => console.warn("[publisher] webcam applyConstraints failed", e));
 
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-webcam",
-        // ScreenShare aqui é proposital — pareado com o swap acima pra
-        // diferenciar tracks. A extensao usa o NOME (wpk-webcam) pra rotear.
         source: Track.Source.ScreenShare,
-        videoEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
+        videoEncoding: { maxBitrate: 1_200_000, maxFramerate: 30, priority: "very-low" as any },
         simulcast: false,
       });
       webcamVideoSid = pub.trackSid;
-      await applyStableParams(pub, { maxBitrate: 2_500_000, maxFramerate: 30 });
+      await applyStableParams(pub, { kind: "webcam", maxBitrate: 1_200_000, maxFramerate: 30 });
     }
 
     const audioTrack = stream.getAudioTracks()[0];
