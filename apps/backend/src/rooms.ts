@@ -2,7 +2,7 @@
 // MVP: store in-memory. Producao depois migra pra Redis/Postgres para
 // permitir cluster multi-no e persistencia de auditoria.
 
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type ParticipantRole, type ScreenCutout } from "@wpk/shared";
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type ParticipantRole } from "@wpk/shared";
 
 export interface Room {
   code: string;
@@ -14,9 +14,6 @@ export interface Room {
     micOn: boolean;
     sourceLabel: string | null;
   };
-  // Retangulo do "buraco" no overlay que o viewer aplica via SVG mask.
-  // Persistido na sala pra viewers que entram tarde receberem o estado atual.
-  cutout: ScreenCutout | null;
 }
 
 const rooms = new Map<string, Room>();
@@ -40,7 +37,6 @@ export function createRoom(customCode?: string): Room {
     hostIdentity: null,
     viewers: new Set(),
     hostState: { webcamOn: false, micOn: false, sourceLabel: null },
-    cutout: null,
   };
   rooms.set(code, room);
   return room;

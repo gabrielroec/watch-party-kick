@@ -17,7 +17,6 @@ function attachTrack(track: RemoteTrack, pub: RemoteTrackPublication, overlay: O
       overlay.screenVideoEl.play().catch(() => {});
     }
   } else if (track.kind === Track.Kind.Audio) {
-    // Todo audio vai pro screenAudioEl (so existe screen audio agora).
     track.attach(overlay.screenAudioEl);
     overlay.screenAudioEl.play().catch(() => {});
   }
@@ -26,8 +25,8 @@ function attachTrack(track: RemoteTrack, pub: RemoteTrackPublication, overlay: O
 async function startSession(session: JoinRoomResponse) {
   await teardown();
 
-  currentOverlay = createOverlay();
-  currentOverlay.infoEl.textContent = `sala ${session.roomCode} · conectando`;
+  currentOverlay = await createOverlay();
+  currentOverlay.infoEl.textContent = `${session.roomCode} · conectando`;
 
   currentRoom = new Room({ adaptiveStream: true });
 
@@ -41,11 +40,11 @@ async function startSession(session: JoinRoomResponse) {
   });
 
   currentRoom.on(RoomEvent.Disconnected, () => {
-    if (currentOverlay) currentOverlay.infoEl.textContent = `sala ${session.roomCode} · desconectado`;
+    if (currentOverlay) currentOverlay.infoEl.textContent = `${session.roomCode} · desconectado`;
   });
 
   await currentRoom.connect(session.livekitUrl, session.livekitToken);
-  currentOverlay.infoEl.textContent = `sala ${session.roomCode} · conectado`;
+  currentOverlay.infoEl.textContent = `${session.roomCode} · ao vivo`;
 
   const overlay = currentOverlay;
   const room = currentRoom;
@@ -77,19 +76,17 @@ async function startSession(session: JoinRoomResponse) {
     overlay.updateStats(fps, rtt, dropped, w, h);
   }, 1000);
 
-  // Pausa player nativo da Kick (libera decoder). MAS deixa rodando se houver
-  // cutout aplicado — o viewer ve a webcam atraves do buraco e precisa do player
-  // ativo (com som mutado). Estrategia: SEMPRE muta, NUNCA pausa.
+  // Pausa o player nativo da Kick — libera decoder, e quando o overlay
+  // estiver maximizado a live oficial fica escondida atras mesmo. Quando
+  // em PiP, o player Kick continua visivel (so mutado) por baixo do overlay.
   const kickVideos = document.querySelectorAll("video");
   kickVideos.forEach((v) => {
     if (!currentOverlay) return;
     if (v === currentOverlay.screenVideoEl) return;
-    try {
-      (v as HTMLVideoElement).muted = true;
-    } catch { /* noop */ }
+    try { (v as HTMLVideoElement).muted = true; } catch { /* noop */ }
   });
 
-  // WS de controle.
+  // WS de controle (presenca).
   const wsUrl = BACKEND_URL.replace(/^http/, "ws") +
     `/ws?room=${encodeURIComponent(session.roomCode)}` +
     `&identity=${encodeURIComponent(session.identity)}` +
@@ -100,9 +97,8 @@ async function startSession(session: JoinRoomResponse) {
       const msg = JSON.parse(ev.data) as WsMessage;
       if (!currentOverlay) return;
       if (msg.type === "presence") {
-        currentOverlay.infoEl.textContent = `sala ${session.roomCode} · ${msg.viewers} viewer${msg.viewers === 1 ? "" : "s"}`;
-      } else if (msg.type === "cutout") {
-        currentOverlay.applyCutout(msg.cutout);
+        currentOverlay.infoEl.textContent =
+          `${session.roomCode} · ${msg.viewers} viewer${msg.viewers === 1 ? "" : "s"}`;
       }
     } catch { /* ignore */ }
   };

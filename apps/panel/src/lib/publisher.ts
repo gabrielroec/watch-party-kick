@@ -190,6 +190,8 @@ export async function connectAsPublisher(params: {
       const lk = new LocalVideoTrack(lockedVideoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
+        // ScreenShare proper agora que o rate-lock canvas resolve o cap
+        // de fps independente do source label.
         source: Track.Source.ScreenShare,
         // VP9 nao tem o cap silencioso de 720p que H264 sofre no LiveKit
         // (profile 42e01f). ~50% mais eficiente em screen content.

@@ -2,7 +2,6 @@
 // NAO transporta video: isso vai pelo LiveKit. Aqui fica:
 // - contagem de viewers (presenca)
 // - flags do host (sourceLabel — webcam/mic permanecem por compat)
-// - cutout do overlay (retangulo do "buraco" pra webcam nativa da Kick)
 // - heartbeat de latencia
 
 import type { WebSocket } from "ws";
@@ -74,9 +73,6 @@ export function attachWebSocketServer(httpServer: Server) {
       micOn: room.hostState.micOn,
       sourceLabel: room.hostState.sourceLabel,
     });
-    // Envia cutout corrente (importante: viewer que entra tarde precisa
-    // saber onde fica o buraco, senao mostra a tela inteira sem webcam nativa).
-    send(ws, { type: "cutout", cutout: room.cutout });
 
     ws.on("message", (raw) => {
       let msg: WsMessage;
@@ -93,9 +89,6 @@ export function attachWebSocketServer(httpServer: Server) {
           micOn: msg.micOn,
           sourceLabel: msg.sourceLabel,
         };
-        broadcastRoom(roomCode, msg);
-      } else if (msg.type === "cutout" && role === "host") {
-        room.cutout = msg.cutout;
         broadcastRoom(roomCode, msg);
       } else if (msg.type === "ping") {
         send(ws, { type: "pong", t: msg.t });
