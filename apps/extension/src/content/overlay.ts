@@ -40,24 +40,24 @@ function findKickPlayer(): HTMLElement | null {
   return el;
 }
 
-// Gera clip-path polygon com fill-rule evenodd: outer + inner em uma unica
-// shape. evenodd corta o retangulo interno como "buraco" do clipping.
+// Gera o atributo 'd' do <path> dentro do <clipPath> SVG.
+// Coordenadas em unidades 0-1 (clipPathUnits=objectBoundingBox).
+// Dois subpaths fechados (outer + inner). clip-rule=evenodd na <path>
+// remove a area do retangulo interno, criando o buraco.
 //
-// Por que clip-path e nao mask-image: Chromium no Windows tem bugs conhecidos
-// com mask-image em <video> com aceleracao de hardware — a mask nao renderiza
-// no path GPU compositing. clip-path com polygon evenodd e implementado no
-// nivel do compositor e funciona consistentemente em Mac/Windows/Linux.
-function makeCutoutClipPath(cutout: ScreenCutout | null): string {
-  if (!cutout) return "none";
-  const x1 = (cutout.x * 100).toFixed(2);
-  const y1 = (cutout.y * 100).toFixed(2);
-  const x2 = ((cutout.x + cutout.w) * 100).toFixed(2);
-  const y2 = ((cutout.y + cutout.h) * 100).toFixed(2);
-  return (
-    `polygon(evenodd, ` +
-    `0% 0%, 100% 0%, 100% 100%, 0% 100%, ` +
-    `${x1}% ${y1}%, ${x1}% ${y2}%, ${x2}% ${y2}%, ${x2}% ${y1}%)`
-  );
+// Por que SVG <clipPath> e nao CSS polygon(evenodd, ...):
+// CSS polygon() e uma UNICA shape com pontos conectados linearmente.
+// Pular do outer pro inner cria uma linha diagonal visivel que torce o
+// formato — o "quadrado desfigurado" que o usuario reportou.
+// SVG <path> aceita multiplos subpaths "M..Z M..Z" como areas separadas
+// e clip-rule=evenodd subtrai a interna da externa corretamente.
+function makeCutoutPathD(cutout: ScreenCutout | null): string {
+  if (!cutout) return "M0 0H1V1H0Z";
+  const x1 = cutout.x.toFixed(4);
+  const y1 = cutout.y.toFixed(4);
+  const x2 = (cutout.x + cutout.w).toFixed(4);
+  const y2 = (cutout.y + cutout.h).toFixed(4);
+  return `M0 0H1V1H0Z M${x1} ${y1}H${x2}V${y2}H${x1}Z`;
 }
 
 export function createOverlay(): OverlayHandles {
@@ -89,7 +89,11 @@ export function createOverlay(): OverlayHandles {
       height: 100%;
       object-fit: contain;
       background: #000;
-      transition: clip-path 80ms linear, -webkit-clip-path 80ms linear;
+      /* Clip-path SVG reference defined in shadow root.
+         O proprio path comeca como rect inteiro = sem clipping aparente
+         (so o outer subpath, sem o inner — clip-rule evenodd nao muda nada). */
+      clip-path: url(#wpkCutoutClip);
+      -webkit-clip-path: url(#wpkCutoutClip);
     }
     .hud {
       position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center;
@@ -123,6 +127,26 @@ export function createOverlay(): OverlayHandles {
 
   const wrap = document.createElement("div");
   wrap.className = "wrap";
+
+  // SVG <clipPath> definido uma unica vez no shadow root. O atributo 'd'
+  // do <path> dentro e atualizado dinamicamente pelo applyCutout.
+  // clipPathUnits=objectBoundingBox => coordenadas 0-1 relativas ao elemento.
+  const svgNs = "http://www.w3.org/2000/svg";
+  const defsSvg = document.createElementNS(svgNs, "svg");
+  defsSvg.setAttribute("width", "0");
+  defsSvg.setAttribute("height", "0");
+  defsSvg.style.position = "absolute";
+  defsSvg.style.pointerEvents = "none";
+  const defs = document.createElementNS(svgNs, "defs");
+  const clipPathEl = document.createElementNS(svgNs, "clipPath");
+  clipPathEl.setAttribute("id", "wpkCutoutClip");
+  clipPathEl.setAttribute("clipPathUnits", "objectBoundingBox");
+  const clipPathPath = document.createElementNS(svgNs, "path");
+  clipPathPath.setAttribute("d", makeCutoutPathD(null));
+  clipPathPath.setAttribute("clip-rule", "evenodd");
+  clipPathEl.appendChild(clipPathPath);
+  defs.appendChild(clipPathEl);
+  defsSvg.appendChild(defs);
 
   const screenVideo = document.createElement("video");
   screenVideo.className = "screen-video";
@@ -163,6 +187,7 @@ export function createOverlay(): OverlayHandles {
   const dragHandle = document.createElement("div");
   dragHandle.className = "drag-handle";
 
+  wrap.appendChild(defsSvg);
   wrap.appendChild(screenVideo);
   wrap.appendChild(screenAudio);
   wrap.appendChild(hud);
@@ -243,9 +268,10 @@ export function createOverlay(): OverlayHandles {
   closeBtn.addEventListener("click", () => destroy());
 
   function applyCutout(cutout: ScreenCutout | null) {
-    const clip = makeCutoutClipPath(cutout);
-    screenVideo.style.clipPath = clip;
-    (screenVideo.style as CSSStyleDeclaration & { webkitClipPath?: string }).webkitClipPath = clip;
+    // So muda o atributo 'd' do path dentro do <clipPath>. O CSS clip-path
+    // url(#wpkCutoutClip) ja esta aplicado e nao muda. Animacao via SMIL nao,
+    // mas a UI da Kick e o player sao estaticos o suficiente pra parecer instantaneo.
+    clipPathPath.setAttribute("d", makeCutoutPathD(cutout));
   }
 
   function updateStats(fps: number, ping: number, dropped = 0, w = 0, h = 0) {
