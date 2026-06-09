@@ -1,12 +1,4 @@
 // Manifest MV3 gerado programaticamente via CRXJS.
-// Observacoes importantes:
-// - content_scripts roda na Kick e em qualquer pagina de teste (localhost)
-// - host_permissions necessario pra chamar o backend (fetch + ws) de dentro
-//   do content script sem bloqueio de CORS
-// - storage usado pra lembrar o ultimo codigo de sala
-// - web_accessible_resources: Shadow DOM nao precisa, mas deixamos aberto
-//   caso futuro precise injetar iframe/asset
-
 import { defineManifest } from "@crxjs/vite-plugin";
 
 export default defineManifest({
@@ -14,10 +6,15 @@ export default defineManifest({
   name: "Watch Party Kick",
   version: "0.1.0",
   description:
-    "Overlay de watch party sobre a Kick. Cola o codigo da sala e assiste junto com o streamer, sem atrapalhar a stream ou o chat.",
+    "Watch party sobre a Kick: cole o código da sala e veja a tela do streamer sobre o player, sem atrapalhar a stream.",
   action: {
     default_popup: "src/popup/index.html",
     default_title: "Watch Party Kick",
+  },
+  icons: {
+    16: "icons/icon-16.png",
+    48: "icons/icon-48.png",
+    128: "icons/icon-128.png",
   },
   background: {
     service_worker: "src/background/index.ts",
@@ -25,15 +22,13 @@ export default defineManifest({
   },
   permissions: ["storage", "activeTab", "scripting"],
   host_permissions: [
-    "http://localhost:4000/*",
-    "http://163.176.58.212:4000/*",
+    "https://watchpartykick.duckdns.org/*",
+    "wss://watchpartykick.duckdns.org/*",
     "https://*.kick.com/*",
-    "https://*.livekit.cloud/*",
-    "wss://*.livekit.cloud/*",
   ],
   content_scripts: [
     {
-      matches: ["https://*.kick.com/*", "http://localhost:3000/*", "http://localhost:5173/*"],
+      matches: ["https://*.kick.com/*"],
       js: ["src/content/index.ts"],
       run_at: "document_idle",
       all_frames: false,
@@ -41,8 +36,8 @@ export default defineManifest({
   ],
   web_accessible_resources: [
     {
-      resources: ["assets/*"],
-      matches: ["https://*.kick.com/*", "http://localhost/*"],
+      resources: ["assets/*", "icons/*"],
+      matches: ["https://*.kick.com/*"],
     },
   ],
 });
