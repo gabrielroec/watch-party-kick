@@ -1,0 +1,16 @@
+{
+  "name": "watch-party-kick",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Watch party overlay sobre a Kick via extensao Chrome/Edge. Streamer captura tela+webcam no painel e publica via WebRTC (LiveKit) pro viewer ver sincronizado, sem interferir na stream publica da Kick.",
+  "scripts": {
+    "dev:backend": "pnpm --filter @wpk/backend dev",
+    "dev:panel": "pnpm --filter @wpk/panel dev",
+    "build:extension": "pnpm --filter @wpk/extension build",
+    "build:shared": "pnpm --filter @wpk/shared build"
+  },
+  "packageManager": "pnpm@10.21.0",
+  "engines": {
+    "node": ">=20"
+  }
+}
