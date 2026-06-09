@@ -1,15 +1,12 @@
-// Publisher com RATE-LOCK CLIENT-SIDE: o stream de getDisplayMedia (que o
-// Chrome pode capar em 30fps pra window/screen) e renderizado num <canvas>
-// off-DOM a 60Hz fixo (drift-corrected setTimeout); canvas.captureStream(60)
-// produz uma MediaStream que emite sempre 60fps independente do source rate.
+// Publisher com canvas COMPOSITE: screen share + webcam PiP desenhados
+// no mesmo canvas a 60fps fixo. canvas.captureStream(60) produz UMA track
+// de video que ja contem tudo composto.
 //
-// Codec: VP9 (LiveKit pina H264 em profile 42e01f que cai pra 720p — origem
-// da regressao de qualidade reportada). VP9 nao tem ceiling, ~50% mais
-// eficiente que H264 em screen content. backupCodec h264 pra fallback.
-//
-// scalabilityMode L1T3: SVC temporal de 3 camadas (sem downscale espacial).
-// Sob pressao o encoder dropa frames altos sem mexer na resolucao,
-// mantendo 1080p estavel.
+// Por que composite no canvas em vez de 2 tracks:
+// - Encoder unico: 100% do budget de encoding pra qualidade alta
+// - Viewer recebe 1 track, nao precisa compor nada (zero cross-platform issues)
+// - LiveKit so SFU forwards 1 stream por canal, custo de banda menor
+// - Cutout/clipPath/mask-image todos sao desnecessarios
 
 import {
   Room,
@@ -19,23 +16,40 @@ import {
   Track,
 } from "livekit-client";
 
+export type WebcamCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+export type WebcamSize = "small" | "medium" | "large";
+
 export interface PublisherHandle {
   room: Room;
   startScreenShare: (stream: MediaStream) => Promise<void>;
   stopScreenShare: () => Promise<void>;
+  setWebcam: (stream: MediaStream | null) => void;
+  setWebcamLayout: (corner: WebcamCorner, size: WebcamSize) => void;
+  getPreviewStream: () => MediaStream | null;
   disconnect: () => Promise<void>;
 }
 
 interface RateLockState {
   sourceVideo: HTMLVideoElement;
+  webcamVideo: HTMLVideoElement;
   canvas: HTMLCanvasElement;
   lockedStream: MediaStream;
   inputStream: MediaStream;
+  layout: { corner: WebcamCorner; size: WebcamSize };
+  webcamActive: boolean;
   stop: () => void;
 }
 
 const TARGET_FPS = 60;
 const FRAME_MS = 1000 / TARGET_FPS;
+const CANVAS_W = 1920;
+const CANVAS_H = 1080;
+const PIP_PADDING = 36;
+const PIP_SIZE_FRACTION: Record<WebcamSize, number> = {
+  small: 0.18,
+  medium: 0.25,
+  large: 0.34,
+};
 
 export async function connectAsPublisher(params: {
   url: string;
@@ -88,10 +102,9 @@ export async function connectAsPublisher(params: {
     }
   }
 
-  // Cria o pipeline canvas rate-lock e retorna a stream forcada em 60fps.
-  // O canvas roda em loop de setTimeout drift-corrected (rAF nao funciona
-  // confiavelmente em background — mas mesmo foreground, rAF segue refresh
-  // do display que pode nao ser 60Hz).
+  // Cria o pipeline de canvas com loop rate-locked 60fps. Desenha screen
+  // cover-fit + webcam PiP composta no mesmo canvas. Retorna a stream
+  // captureStream(60) que vai pro encoder do LiveKit.
   async function makeRateLockedStream(inputStream: MediaStream): Promise<RateLockState> {
     const inputVideo = inputStream.getVideoTracks()[0];
     if (!inputVideo) throw new Error("input stream sem video track");
@@ -102,20 +115,17 @@ export async function connectAsPublisher(params: {
     sourceVideo.srcObject = new MediaStream([inputVideo]);
     await sourceVideo.play().catch(() => {});
 
-    // Espera metadata pra saber dimensoes reais do source.
+    const webcamVideo = document.createElement("video");
+    webcamVideo.muted = true;
+    webcamVideo.playsInline = true;
+    // srcObject preenchido depois via setWebcam
+
     await new Promise<void>((resolve) => {
       if (sourceVideo.videoWidth > 0) return resolve();
       sourceVideo.onloadedmetadata = () => resolve();
-      // Fallback timeout pra nao travar
       setTimeout(() => resolve(), 1500);
     });
 
-    // Canvas SEMPRE 1920x1080 (16:9) independente do source. Source e
-    // desenhado com cover-fit (preserva aspect, crop center pra preencher).
-    // Resultado: video publicado e 16:9 e bate com aspect do player Kick,
-    // viewer recebe imagem que enche 100% sem letterbox.
-    const CANVAS_W = 1920;
-    const CANVAS_H = 1080;
     const canvas = document.createElement("canvas");
     canvas.width = CANVAS_W;
     canvas.height = CANVAS_H;
@@ -126,24 +136,44 @@ export async function connectAsPublisher(params: {
     });
     if (!ctx) throw new Error("canvas 2d context indisponivel");
 
-    // Computa dimensoes cover-fit do source dentro do canvas 16:9.
-    function computeCoverDraw(): { dx: number; dy: number; dw: number; dh: number } {
+    // Estado de layout do PiP — mutavel via setWebcamLayout sem recriar canvas.
+    const layout = { corner: "bottom-right" as WebcamCorner, size: "medium" as WebcamSize };
+    const state = {
+      sourceVideo, webcamVideo, canvas,
+      lockedStream: null as unknown as MediaStream,
+      inputStream,
+      layout,
+      webcamActive: false,
+    };
+
+    function computeScreenDraw(): { dx: number; dy: number; dw: number; dh: number } {
       const sw = sourceVideo.videoWidth;
       const sh = sourceVideo.videoHeight;
       if (!sw || !sh) return { dx: 0, dy: 0, dw: CANVAS_W, dh: CANVAS_H };
       const srcAspect = sw / sh;
       const dstAspect = CANVAS_W / CANVAS_H;
       if (srcAspect > dstAspect) {
-        // Source mais largo que 16:9 — recorta laterais
         const dh = CANVAS_H;
         const dw = dh * srcAspect;
         return { dx: (CANVAS_W - dw) / 2, dy: 0, dw, dh };
       } else {
-        // Source mais alto que 16:9 — recorta topo/base
         const dw = CANVAS_W;
         const dh = dw / srcAspect;
         return { dx: 0, dy: (CANVAS_H - dh) / 2, dw, dh };
       }
+    }
+
+    function computeWebcamRect(): { x: number; y: number; w: number; h: number } | null {
+      if (!state.webcamActive || webcamVideo.videoWidth === 0) return null;
+      const fraction = PIP_SIZE_FRACTION[state.layout.size];
+      const aspect = webcamVideo.videoWidth / webcamVideo.videoHeight;
+      const w = CANVAS_W * fraction;
+      const h = w / aspect;
+      const isRight = state.layout.corner.includes("right");
+      const isBottom = state.layout.corner.includes("bottom");
+      const x = isRight ? CANVAS_W - w - PIP_PADDING : PIP_PADDING;
+      const y = isBottom ? CANVAS_H - h - PIP_PADDING : PIP_PADDING;
+      return { x, y, w, h };
     }
 
     let running = true;
@@ -153,10 +183,30 @@ export async function connectAsPublisher(params: {
 
     function tick() {
       if (!running) return;
+
+      // Camada 1: screen share full canvas
       if (sourceVideo.videoWidth > 0) {
-        const { dx, dy, dw, dh } = computeCoverDraw();
+        const { dx, dy, dw, dh } = computeScreenDraw();
         ctx!.drawImage(sourceVideo, dx, dy, dw, dh);
       }
+
+      // Camada 2: webcam PiP (se ativa)
+      const pip = computeWebcamRect();
+      if (pip) {
+        ctx!.save();
+        // Sombra discreta pra destacar do fundo
+        ctx!.shadowColor = "rgba(0,0,0,0.6)";
+        ctx!.shadowBlur = 20;
+        ctx!.shadowOffsetX = 0;
+        ctx!.shadowOffsetY = 4;
+        ctx!.drawImage(webcamVideo, pip.x, pip.y, pip.w, pip.h);
+        ctx!.restore();
+        // Borda branca sutil
+        ctx!.strokeStyle = "rgba(255,255,255,0.25)";
+        ctx!.lineWidth = 3;
+        ctx!.strokeRect(pip.x, pip.y, pip.w, pip.h);
+      }
+
       n++;
       const nextTargetMs = startMs + n * FRAME_MS;
       const delay = Math.max(0, nextTargetMs - performance.now());
@@ -164,17 +214,20 @@ export async function connectAsPublisher(params: {
     }
     tick();
 
-    const lockedStream = canvas.captureStream(TARGET_FPS);
+    state.lockedStream = canvas.captureStream(TARGET_FPS);
 
-    function stop() {
-      running = false;
-      if (timerId != null) clearTimeout(timerId);
-      lockedStream.getTracks().forEach((t) => t.stop());
-      sourceVideo.srcObject = null;
-      sourceVideo.remove();
-    }
-
-    return { sourceVideo, canvas, lockedStream, inputStream, stop };
+    return {
+      ...state,
+      stop() {
+        running = false;
+        if (timerId != null) clearTimeout(timerId);
+        state.lockedStream.getTracks().forEach((t) => t.stop());
+        sourceVideo.srcObject = null;
+        webcamVideo.srcObject = null;
+        sourceVideo.remove();
+        webcamVideo.remove();
+      },
+    } as RateLockState;
   }
 
   async function startScreenShare(inputStream: MediaStream) {
@@ -184,27 +237,19 @@ export async function connectAsPublisher(params: {
 
     const lockedVideoTrack = rateLock.lockedStream.getVideoTracks()[0];
     if (lockedVideoTrack) {
-      // 'detail' preserva sharpness de texto/UI (importante pra screen).
       lockedVideoTrack.contentHint = "detail";
 
       const lk = new LocalVideoTrack(lockedVideoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
-        // ScreenShare proper agora que o rate-lock canvas resolve o cap
-        // de fps independente do source label.
         source: Track.Source.ScreenShare,
-        // VP9 nao tem o cap silencioso de 720p que H264 sofre no LiveKit
-        // (profile 42e01f). ~50% mais eficiente em screen content.
         videoCodec: "vp9",
-        // Fallback pra viewers em Safari ou hardware sem VP9 decoder.
         backupCodec: { codec: "h264" },
         videoEncoding: {
           maxBitrate: 8_000_000,
           maxFramerate: TARGET_FPS,
           priority: "high" as any,
         },
-        // SVC temporal 3 camadas — sob pressao o encoder dropa frames altos
-        // sem mexer na resolucao, 1080p estavel.
         scalabilityMode: "L1T3",
         simulcast: false,
         degradationPreference: "maintain-framerate",
@@ -217,7 +262,7 @@ export async function connectAsPublisher(params: {
       });
     }
 
-    // Audio passa direto sem rate-lock (audio nao tem esse problema).
+    // Audio do screen share publicado separadamente.
     const audioTrack = inputStream.getAudioTracks()[0];
     if (audioTrack) {
       const lk = new LocalAudioTrack(audioTrack, undefined, false);
@@ -240,6 +285,34 @@ export async function connectAsPublisher(params: {
     }
   }
 
+  function setWebcam(stream: MediaStream | null) {
+    if (!rateLock) {
+      console.warn("[publisher] setWebcam chamado sem screen share ativo");
+      return;
+    }
+    if (stream) {
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        rateLock.webcamVideo.srcObject = new MediaStream([videoTrack]);
+        rateLock.webcamVideo.play().catch(() => {});
+        rateLock.webcamActive = true;
+      }
+    } else {
+      rateLock.webcamVideo.srcObject = null;
+      rateLock.webcamActive = false;
+    }
+  }
+
+  function setWebcamLayout(corner: WebcamCorner, size: WebcamSize) {
+    if (!rateLock) return;
+    rateLock.layout.corner = corner;
+    rateLock.layout.size = size;
+  }
+
+  function getPreviewStream(): MediaStream | null {
+    return rateLock?.lockedStream ?? null;
+  }
+
   async function disconnect() {
     if (rateLock) {
       rateLock.stop();
@@ -248,5 +321,13 @@ export async function connectAsPublisher(params: {
     await room.disconnect();
   }
 
-  return { room, startScreenShare, stopScreenShare, disconnect };
+  return {
+    room,
+    startScreenShare,
+    stopScreenShare,
+    setWebcam,
+    setWebcamLayout,
+    getPreviewStream,
+    disconnect,
+  };
 }

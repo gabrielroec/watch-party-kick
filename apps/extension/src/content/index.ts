@@ -25,7 +25,7 @@ function attachTrack(track: RemoteTrack, pub: RemoteTrackPublication, overlay: O
 async function startSession(session: JoinRoomResponse) {
   await teardown();
 
-  currentOverlay = await createOverlay();
+  currentOverlay = createOverlay();
   currentOverlay.infoEl.textContent = `${session.roomCode} · conectando`;
 
   currentRoom = new Room({ adaptiveStream: true });

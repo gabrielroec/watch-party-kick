@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { CreateRoomResponse } from "@wpk/shared";
 import { isCreateRoomResponse } from "@wpk/shared";
-import { connectAsPublisher, type PublisherHandle } from "@/lib/publisher";
+import { connectAsPublisher, type PublisherHandle, type WebcamCorner, type WebcamSize } from "@/lib/publisher";
 import { openControlSocket } from "@/lib/controlSocket";
 
 const BACKEND_URL = "https://watchpartykick.duckdns.org";
@@ -19,10 +19,13 @@ export default function PanelPage() {
   const [roomCode, setRoomCode] = useState("");
 
   const [screenStream, setScreenStream] = useState<MediaStream | null>(null);
+  const [webcamStream, setWebcamStream] = useState<MediaStream | null>(null);
+  const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>("bottom-right");
+  const [webcamSize, setWebcamSize] = useState<WebcamSize>("medium");
 
   const publisherRef = useRef<PublisherHandle | null>(null);
   const wsRef = useRef<ReturnType<typeof openControlSocket> | null>(null);
-  const screenPreviewRef = useRef<HTMLVideoElement | null>(null);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const createRoom = useCallback(async () => {
     if (roomCode.trim().length < 3) {
@@ -61,6 +64,11 @@ export default function PanelPage() {
     if (screenStream) {
       screenStream.getTracks().forEach((t) => t.stop());
       setScreenStream(null);
+      // Webcam tambem para — depende do canvas que o screen criou
+      if (webcamStream) {
+        webcamStream.getTracks().forEach((t) => t.stop());
+        setWebcamStream(null);
+      }
       await publisherRef.current?.stopScreenShare();
       return;
     }
@@ -81,15 +89,23 @@ export default function PanelPage() {
       const track = stream.getVideoTracks()[0];
       if (!track) { stream.getTracks().forEach((t) => t.stop()); setBusy(null); return; }
 
-      const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string };
-      console.info("[panel] capture source", settings.displaySurface, "fps", settings.frameRate);
-
       track.addEventListener("ended", () => {
         setScreenStream(null);
+        if (webcamStream) {
+          webcamStream.getTracks().forEach((t) => t.stop());
+          setWebcamStream(null);
+        }
         publisherRef.current?.stopScreenShare();
       });
       setScreenStream(stream);
       await publisherRef.current?.startScreenShare(stream);
+
+      // Mostra o canvas composto no preview (e exatamente o que o viewer ve)
+      const previewStream = publisherRef.current?.getPreviewStream();
+      if (previewVideoRef.current && previewStream) {
+        previewVideoRef.current.srcObject = previewStream;
+        previewVideoRef.current.play().catch(() => {});
+      }
     } catch (e) {
       console.warn("[panel] screen share falhou", e);
       if (e instanceof Error && e.name !== "NotAllowedError") {
@@ -98,17 +114,42 @@ export default function PanelPage() {
     } finally {
       setBusy(null);
     }
-  }, [screenStream]);
+  }, [screenStream, webcamStream]);
 
-  // Preview da tela
-  useEffect(() => {
-    if (screenPreviewRef.current) {
-      screenPreviewRef.current.srcObject = screenStream;
-      if (screenStream) screenPreviewRef.current.play().catch(() => {});
+  const toggleWebcam = useCallback(async () => {
+    if (webcamStream) {
+      webcamStream.getTracks().forEach((t) => t.stop());
+      setWebcamStream(null);
+      publisherRef.current?.setWebcam(null);
+      return;
     }
-  }, [screenStream]);
+    if (!screenStream) {
+      setErrorMsg("Compartilhe a tela primeiro pra adicionar a webcam.");
+      return;
+    }
+    setBusy("webcam");
+    setErrorMsg(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        audio: false,
+      });
+      setWebcamStream(stream);
+      publisherRef.current?.setWebcam(stream);
+    } catch (e) {
+      console.error("[panel] webcam falhou", e);
+      setErrorMsg(e instanceof Error ? e.message : "erro ao acessar webcam");
+    } finally {
+      setBusy(null);
+    }
+  }, [webcamStream, screenStream]);
 
-  // WebSocket de controle
+  // Layout webcam -> publisher
+  useEffect(() => {
+    publisherRef.current?.setWebcamLayout(webcamCorner, webcamSize);
+  }, [webcamCorner, webcamSize]);
+
+  // WS de controle
   useEffect(() => {
     if (!session) return;
     const ws = openControlSocket({
@@ -129,6 +170,7 @@ export default function PanelPage() {
     return () => {
       publisherRef.current?.disconnect().catch(() => {});
       screenStream?.getTracks().forEach((t) => t.stop());
+      webcamStream?.getTracks().forEach((t) => t.stop());
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -173,6 +215,7 @@ export default function PanelPage() {
       {session && (
         <section style={{ display: "grid", gridTemplateColumns: "1fr 320px", gap: 24 }}>
           <div>
+            {/* Preview do canvas composto — exatamente o que o viewer ve */}
             <div style={{
               aspectRatio: "16/9",
               background: "#0a0b0f",
@@ -182,11 +225,11 @@ export default function PanelPage() {
               position: "relative",
             }}>
               <video
-                ref={screenPreviewRef}
+                ref={previewVideoRef}
                 muted
                 playsInline
                 style={{
-                  width: "100%", height: "100%", objectFit: "contain",
+                  width: "100%", height: "100%", objectFit: "cover",
                   display: screenStream ? "block" : "none",
                 }}
               />
@@ -209,6 +252,9 @@ export default function PanelPage() {
                   Sem som
                 </button>
               )}
+              <button onClick={toggleWebcam} disabled={busy === "webcam" || !screenStream}>
+                {busy === "webcam" ? "Abrindo..." : webcamStream ? "Desligar webcam" : "Ligar webcam"}
+              </button>
             </div>
 
             {!screenStream && (
@@ -226,10 +272,9 @@ export default function PanelPage() {
               marginTop: 12, padding: 12,
               background: "#15171d", border: "1px solid #262934", borderRadius: 8, fontSize: 13, opacity: 0.85,
             }}>
-              <strong>Como o viewer vê:</strong> uma janela flutuante draggable + resizable no canto da página da Kick.
-              O viewer pode arrastar pra onde quiser, redimensionar pelos cantos, ou clicar em <em>Maximizar</em> pra
-              cobrir o player Kick e assistir o screen share em tela cheia. A webcam do streamer fica visível
-              naturalmente na live oficial da Kick por baixo.
+              <strong>Como o viewer ve:</strong> o overlay cobre o player Kick exatamente. Mostra a tela compartilhada
+              em cima da live. Se a webcam estiver ligada, ela aparece como PiP no canto escolhido — tudo num
+              unico stream de video (zero compositing tricks no viewer).
             </div>
           </div>
 
@@ -244,6 +289,37 @@ export default function PanelPage() {
                 Viewers conectados: <strong>{viewers}</strong>
               </div>
             </div>
+
+            {webcamStream && (
+              <div style={{ padding: 16, background: "#15171d", border: "1px solid #262934", borderRadius: 12 }}>
+                <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 10 }}>POSIÇÃO DA WEBCAM</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 12 }}>
+                  {(["top-left", "top-right", "bottom-left", "bottom-right"] as WebcamCorner[]).map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setWebcamCorner(c)}
+                      className={webcamCorner === c ? "primary" : undefined}
+                      style={{ fontSize: 12 }}
+                    >
+                      {c === "top-left" ? "↖" : c === "top-right" ? "↗" : c === "bottom-left" ? "↙" : "↘"} {c}
+                    </button>
+                  ))}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 6 }}>TAMANHO</div>
+                <div style={{ display: "flex", gap: 6 }}>
+                  {(["small", "medium", "large"] as WebcamSize[]).map((s) => (
+                    <button
+                      key={s}
+                      onClick={() => setWebcamSize(s)}
+                      className={webcamSize === s ? "primary" : undefined}
+                      style={{ flex: 1, fontSize: 12 }}
+                    >
+                      {s === "small" ? "P" : s === "medium" ? "M" : "G"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
           </aside>
         </section>
       )}
