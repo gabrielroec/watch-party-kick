@@ -108,28 +108,12 @@ export default function PanelPage() {
       const track = stream.getVideoTracks()[0];
       if (!track) { stream.getTracks().forEach((t) => t.stop()); setBusy(null); return; }
 
-      // BLOQUEIO: Chrome tem cap hard de 30fps em window/screen capture.
-      // So tab capture (displaySurface='browser') vai pelo pipeline de 60fps.
-      // Sem isso, FPS sempre tem teto 30 e o problema do usuario nunca some.
+      // O cap de 30fps no Chrome pra window/screen e contornado client-side:
+      // o publisher renderiza o video num canvas a 60Hz fixo e usa
+      // canvas.captureStream(60) — a track final emite locked 60fps
+      // independente do source rate. Log a fonte pra diagnostico.
       const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string };
-      if (settings.displaySurface && settings.displaySurface !== "browser") {
-        stream.getTracks().forEach((t) => t.stop());
-        setErrorMsg(
-          `Voce escolheu "${settings.displaySurface}", que o Chrome limita a 30fps. ` +
-          `Pra 60fps escolha "Aba do Chrome" no picker e selecione a aba com o conteudo.`,
-        );
-        setBusy(null);
-        return;
-      }
-
-      // Verifica capabilities: se reportar maxFrameRate < 60, o picker bugou.
-      try {
-        const caps = (track.getCapabilities?.() ?? {}) as MediaTrackCapabilities;
-        const fpsMax = (caps as { frameRate?: { max?: number } }).frameRate?.max;
-        if (fpsMax != null && fpsMax < 60) {
-          console.warn(`[panel] capabilities reportam maxFrameRate=${fpsMax}; cap pode estar ativo`);
-        }
-      } catch { /* noop */ }
+      console.info("[panel] capture source", settings.displaySurface, "reported fps", settings.frameRate);
 
       track.addEventListener("ended", () => {
         setScreenStream(null);
@@ -439,9 +423,9 @@ export default function PanelPage() {
                 marginTop: 12, padding: 12,
                 background: "#1a2a18", border: "1px solid #2dd879", borderRadius: 8, fontSize: 13,
               }}>
-                <strong style={{ color: "#2dd879" }}>Importante para 60fps:</strong> no picker que aparecer,
-                escolha <strong>"Aba do Chrome"</strong> (NAO "Janela" nem "Tela inteira"). O Chrome trava a
-                captura de janela/tela em 30fps; so a aba consegue 60fps.
+                <strong style={{ color: "#2dd879" }}>60fps em qualquer modo:</strong> pode compartilhar Aba,
+                Janela ou Tela inteira — o publisher tem rate-lock client-side que sempre emite 60fps mesmo
+                quando o Chrome captura a 30fps no source.
               </div>
             )}
 

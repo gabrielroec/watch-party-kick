@@ -1,6 +1,15 @@
-// Publisher dedicado APENAS ao screen share. Webcam foi removida do pipeline:
-// 100% do encoder budget vai pro video, FPS estoura, viewer ve a webcam nativa
-// da Kick atraves de um cutout no overlay.
+// Publisher com RATE-LOCK CLIENT-SIDE: o stream de getDisplayMedia (que o
+// Chrome pode capar em 30fps pra window/screen) e renderizado num <canvas>
+// off-DOM a 60Hz fixo (drift-corrected setTimeout); canvas.captureStream(60)
+// produz uma MediaStream que emite sempre 60fps independente do source rate.
+//
+// Codec: VP9 (LiveKit pina H264 em profile 42e01f que cai pra 720p — origem
+// da regressao de qualidade reportada). VP9 nao tem ceiling, ~50% mais
+// eficiente que H264 em screen content. backupCodec h264 pra fallback.
+//
+// scalabilityMode L1T3: SVC temporal de 3 camadas (sem downscale espacial).
+// Sob pressao o encoder dropa frames altos sem mexer na resolucao,
+// mantendo 1080p estavel.
 
 import {
   Room,
@@ -16,6 +25,17 @@ export interface PublisherHandle {
   stopScreenShare: () => Promise<void>;
   disconnect: () => Promise<void>;
 }
+
+interface RateLockState {
+  sourceVideo: HTMLVideoElement;
+  canvas: HTMLCanvasElement;
+  lockedStream: MediaStream;
+  inputStream: MediaStream;
+  stop: () => void;
+}
+
+const TARGET_FPS = 60;
+const FRAME_MS = 1000 / TARGET_FPS;
 
 export async function connectAsPublisher(params: {
   url: string;
@@ -34,6 +54,7 @@ export async function connectAsPublisher(params: {
 
   let screenVideoSid: string | undefined;
   let screenAudioSid: string | undefined;
+  let rateLock: RateLockState | null = null;
 
   async function unpublishBySid(sid: string | undefined) {
     if (!sid) return;
@@ -49,69 +70,130 @@ export async function connectAsPublisher(params: {
     opts: { maxBitrate: number; maxFramerate: number },
   ) {
     try {
-      const sender = pub.track?.sender;
+      const sender: RTCRtpSender | undefined = pub.track?.sender;
       if (!sender) return;
       const p = sender.getParameters();
-      if (p.encodings?.[0]) {
-        p.encodings[0].maxBitrate = opts.maxBitrate;
-        p.encodings[0].maxFramerate = opts.maxFramerate;
-        p.encodings[0].priority = "high";
-        p.encodings[0].networkPriority = "high";
-        // maintain-framerate: sob pressao reduz resolucao (1080p -> 720p),
-        // nao FPS. Watch party prioriza fluidez.
-        delete p.encodings[0].scaleResolutionDownBy;
-        p.degradationPreference = "maintain-framerate";
-        await sender.setParameters(p);
-      }
+      p.degradationPreference = "maintain-framerate";
+      p.encodings?.forEach((enc) => {
+        enc.maxBitrate = opts.maxBitrate;
+        enc.maxFramerate = opts.maxFramerate;
+        enc.priority = "high";
+        enc.networkPriority = "high";
+        (enc as RTCRtpEncodingParameters & { scalabilityMode?: string }).scalabilityMode = "L1T3";
+        delete enc.scaleResolutionDownBy;
+      });
+      await sender.setParameters(p);
     } catch (e) {
       console.warn("[publisher] applyStableParams failed", e);
     }
   }
 
-  async function startScreenShare(stream: MediaStream) {
-    await stopScreenShare();
+  // Cria o pipeline canvas rate-lock e retorna a stream forcada em 60fps.
+  // O canvas roda em loop de setTimeout drift-corrected (rAF nao funciona
+  // confiavelmente em background — mas mesmo foreground, rAF segue refresh
+  // do display que pode nao ser 60Hz).
+  async function makeRateLockedStream(inputStream: MediaStream): Promise<RateLockState> {
+    const inputVideo = inputStream.getVideoTracks()[0];
+    if (!inputVideo) throw new Error("input stream sem video track");
 
-    const videoTrack = stream.getVideoTracks()[0];
-    if (videoTrack) {
-      videoTrack.contentHint = "motion";
+    const sourceVideo = document.createElement("video");
+    sourceVideo.muted = true;
+    sourceVideo.playsInline = true;
+    sourceVideo.srcObject = new MediaStream([inputVideo]);
+    await sourceVideo.play().catch(() => {});
 
-      await videoTrack.applyConstraints({
-        width: { ideal: 1920 },
-        height: { ideal: 1080 },
-        frameRate: { ideal: 60, max: 60 },
-      }).catch((e) => console.warn("[publisher] screen applyConstraints failed", e));
+    // Espera metadata pra saber dimensoes reais do source.
+    await new Promise<void>((resolve) => {
+      if (sourceVideo.videoWidth > 0) return resolve();
+      sourceVideo.onloadedmetadata = () => resolve();
+      // Fallback timeout pra nao travar
+      setTimeout(() => resolve(), 1500);
+    });
 
-      try {
-        const settings = videoTrack.getSettings();
-        const caps = (videoTrack.getCapabilities?.() ?? {}) as MediaTrackCapabilities;
-        console.info("[publisher] screen track caps/settings", {
-          surface: (settings as { displaySurface?: string }).displaySurface,
-          capsFrameRateMax: (caps as { frameRate?: { max?: number } }).frameRate?.max,
-          settingsFrameRate: settings.frameRate,
-          settingsWidth: settings.width,
-          settingsHeight: settings.height,
-        });
-      } catch { /* noop */ }
+    const srcW = sourceVideo.videoWidth || 1920;
+    const srcH = sourceVideo.videoHeight || 1080;
+    // Limita a 1920x1080 mantendo aspect ratio.
+    const scale = Math.min(1920 / srcW, 1080 / srcH, 1);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(srcW * scale);
+    canvas.height = Math.round(srcH * scale);
+    const ctx = canvas.getContext("2d", {
+      alpha: false,
+      desynchronized: true,
+      willReadFrequently: false,
+    });
+    if (!ctx) throw new Error("canvas 2d context indisponivel");
 
-      const lk = new LocalVideoTrack(videoTrack, undefined, false);
-      const pub = await room.localParticipant.publishTrack(lk, {
-        name: "wpk-screen",
-        // HACK proposital: publica como Camera em vez de ScreenShare. Chromium
-        // aplica um cap interno de framerate diferente pra ScreenShare (BWE +
-        // content adapter agressivos). Marcando como Camera, o encoder roda
-        // sem essas restricoes e destrava FPS. A extensao roteia por NOME
-        // ("wpk-screen"), nao por source, entao nao quebra nada.
-        source: Track.Source.Camera,
-        // H264 ativa HW encode no streamer + HW decode no viewer (universal).
-        videoCodec: "h264",
-        videoEncoding: { maxBitrate: 6_000_000, maxFramerate: 60, priority: "high" as any },
-        simulcast: false,
-      });
-      screenVideoSid = pub.trackSid;
-      await applyStableParams(pub, { maxBitrate: 6_000_000, maxFramerate: 60 });
+    let running = true;
+    let timerId: number | undefined;
+    const startMs = performance.now();
+    let n = 0;
+
+    function tick() {
+      if (!running) return;
+      if (sourceVideo.videoWidth > 0) {
+        ctx!.drawImage(sourceVideo, 0, 0, canvas.width, canvas.height);
+      }
+      n++;
+      const nextTargetMs = startMs + n * FRAME_MS;
+      const delay = Math.max(0, nextTargetMs - performance.now());
+      timerId = window.setTimeout(tick, delay);
+    }
+    tick();
+
+    const lockedStream = canvas.captureStream(TARGET_FPS);
+
+    function stop() {
+      running = false;
+      if (timerId != null) clearTimeout(timerId);
+      lockedStream.getTracks().forEach((t) => t.stop());
+      sourceVideo.srcObject = null;
+      sourceVideo.remove();
     }
 
-    const audioTrack = stream.getAudioTracks()[0];
+    return { sourceVideo, canvas, lockedStream, inputStream, stop };
+  }
+
+  async function startScreenShare(inputStream: MediaStream) {
+    await stopScreenShare();
+
+    rateLock = await makeRateLockedStream(inputStream);
+
+    const lockedVideoTrack = rateLock.lockedStream.getVideoTracks()[0];
+    if (lockedVideoTrack) {
+      // 'detail' preserva sharpness de texto/UI (importante pra screen).
+      lockedVideoTrack.contentHint = "detail";
+
+      const lk = new LocalVideoTrack(lockedVideoTrack, undefined, false);
+      const pub = await room.localParticipant.publishTrack(lk, {
+        name: "wpk-screen",
+        source: Track.Source.ScreenShare,
+        // VP9 nao tem o cap silencioso de 720p que H264 sofre no LiveKit
+        // (profile 42e01f). ~50% mais eficiente em screen content.
+        videoCodec: "vp9",
+        // Fallback pra viewers em Safari ou hardware sem VP9 decoder.
+        backupCodec: { codec: "h264" },
+        videoEncoding: {
+          maxBitrate: 8_000_000,
+          maxFramerate: TARGET_FPS,
+          priority: "high" as any,
+        },
+        // SVC temporal 3 camadas — sob pressao o encoder dropa frames altos
+        // sem mexer na resolucao, 1080p estavel.
+        scalabilityMode: "L1T3",
+        simulcast: false,
+        degradationPreference: "maintain-framerate",
+      } as any);
+      screenVideoSid = pub.trackSid;
+
+      await applyStableParams(pub, {
+        maxBitrate: 8_000_000,
+        maxFramerate: TARGET_FPS,
+      });
+    }
+
+    // Audio passa direto sem rate-lock (audio nao tem esse problema).
+    const audioTrack = inputStream.getAudioTracks()[0];
     if (audioTrack) {
       const lk = new LocalAudioTrack(audioTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
@@ -127,9 +209,17 @@ export async function connectAsPublisher(params: {
     await unpublishBySid(screenAudioSid);
     screenVideoSid = undefined;
     screenAudioSid = undefined;
+    if (rateLock) {
+      rateLock.stop();
+      rateLock = null;
+    }
   }
 
   async function disconnect() {
+    if (rateLock) {
+      rateLock.stop();
+      rateLock = null;
+    }
     await room.disconnect();
   }
 
