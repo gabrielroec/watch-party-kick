@@ -1,5 +1,5 @@
 // Gerenciamento em memoria das salas ativas.
-// MVP: store in-memory. Produc ao depois migra pra Redis/Postgres para
+// MVP: store in-memory. Producao depois migra pra Redis/Postgres para
 // permitir cluster multi-no e persistencia de auditoria.
 
 import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type ParticipantRole } from "@wpk/shared";
@@ -8,6 +8,7 @@ export interface Room {
   code: string;
   createdAt: number;
   hostIdentity: string | null;  // preenchido quando o host se conecta
+  camIdentity: string | null;   // pareada com hostIdentity; LiveKit-only, sem WS
   viewers: Set<string>;          // identidades conectadas ao WS
   hostState: {
     webcamOn: boolean;
@@ -36,6 +37,7 @@ export function createRoom(customCode?: string): Room {
     code,
     createdAt: Date.now(),
     hostIdentity: null,
+    camIdentity: null,
     viewers: new Set(),
     hostState: { webcamOn: false, micOn: false, sourceLabel: null },
   };
@@ -52,6 +54,17 @@ export function getRoom(code: string): Room | undefined {
 export function makeIdentity(role: ParticipantRole): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${role}-${rand}`;
+}
+
+// Para o host com 2 PeerConnections (screen + cam em rooms LiveKit separadas
+// mas mesmo roomCode), geramos par compartilhando o mesmo nonce. Ambas tem
+// prefixo distinto pra LiveKit aceitar como participantes diferentes.
+export function makeHostIdentities(): { mainIdentity: string; camIdentity: string } {
+  const nonce = Math.random().toString(36).slice(2, 10);
+  return {
+    mainIdentity: `host-${nonce}`,
+    camIdentity: `cam-${nonce}`,
+  };
 }
 
 // Limpeza periodica de salas abandonadas (sem host e sem viewers).

@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { JoinRoomResponse, SceneLayout, WebcamCorner, WebcamSize } from "@wpk/shared";
-import { DEFAULT_SCENE_LAYOUT } from "@wpk/shared";
+import type { CreateRoomResponse, SceneLayout, WebcamCorner, WebcamSize } from "@wpk/shared";
+import { DEFAULT_SCENE_LAYOUT, isCreateRoomResponse } from "@wpk/shared";
 import { connectAsPublisher, type PublisherHandle } from "@/lib/publisher";
 import { openControlSocket } from "@/lib/controlSocket";
 
@@ -13,7 +13,8 @@ type Status = "idle" | "creating" | "connected" | "error";
 export default function PanelPage() {
   const [status, setStatus] = useState<Status>("idle");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [session, setSession] = useState<JoinRoomResponse | null>(null);
+  // session carrega o pacote completo (main + cam) pro host.
+  const [session, setSession] = useState<CreateRoomResponse | null>(null);
   const [viewers, setViewers] = useState(0);
   const [busy, setBusy] = useState<string | null>(null);
   const [roomCode, setRoomCode] = useState("");
@@ -43,13 +44,21 @@ export default function PanelPage() {
         body: JSON.stringify({ code: roomCode.trim().toUpperCase() }),
       });
       if (!resp.ok) throw new Error(`backend respondeu ${resp.status}`);
-      const data = (await resp.json()) as JoinRoomResponse;
+      const raw = await resp.json();
+      // Backend deve devolver CreateRoomResponse pro host. Narrowing detecta
+      // deploy desatualizado em vez de silenciar.
+      if (!isCreateRoomResponse(raw)) {
+        throw new Error("backend desatualizado: faltam camToken/camIdentity");
+      }
+      const data: CreateRoomResponse = raw;
       setSession(data);
       setStatus("connected");
 
       const pub = await connectAsPublisher({
         url: data.livekitUrl,
-        token: data.livekitToken,
+        screenToken: data.mainToken,
+        // Token ja vem no payload — funcao apenas devolve. Sem round-trip extra.
+        getCamToken: async () => data.camToken,
       });
       publisherRef.current = pub;
     } catch (e) {
@@ -152,7 +161,7 @@ export default function PanelPage() {
     const ws = openControlSocket({
       backendUrl: BACKEND_URL,
       roomCode: session.roomCode,
-      identity: session.identity,
+      identity: session.mainIdentity, // cam-* nao usa WS
       role: "host",
       onMessage: (m) => {
         if (m.type === "presence") setViewers(m.viewers);
