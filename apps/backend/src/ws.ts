@@ -1,11 +1,9 @@
 // WebSocket leve para estado/presenca da sala.
 // NAO transporta video: isso vai pelo LiveKit. Aqui fica:
 // - contagem de viewers (presenca)
-// - flags do host (webcam on/off, mic on/off, nome da fonte)
+// - flags do host (sourceLabel — webcam/mic permanecem por compat)
+// - cutout do overlay (retangulo do "buraco" pra webcam nativa da Kick)
 // - heartbeat de latencia
-//
-// Essas infos alimentam o HUD da extensao (ex.: "mic mutado pelo streamer")
-// e metricas do painel sem poluir o canal WebRTC.
 
 import type { WebSocket } from "ws";
 import { WebSocketServer } from "ws";
@@ -47,7 +45,6 @@ export function attachWebSocketServer(httpServer: Server) {
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
   wss.on("connection", (ws, req) => {
-    // Query: /ws?room=ABC123&identity=host-xxx&role=host
     const url = new URL(req.url ?? "", "http://localhost");
     const roomCode = (url.searchParams.get("room") ?? "").toUpperCase();
     const identity = url.searchParams.get("identity") ?? "";
@@ -70,13 +67,16 @@ export function attachWebSocketServer(httpServer: Server) {
 
     send(ws, { type: "hello", roomCode, role, identity });
     broadcastPresence(roomCode);
-    // Ao entrar, o viewer recebe o ultimo estado conhecido do host.
+    // Estado inicial pro viewer recem-conectado.
     send(ws, {
       type: "host-state",
       webcamOn: room.hostState.webcamOn,
       micOn: room.hostState.micOn,
       sourceLabel: room.hostState.sourceLabel,
     });
+    // Envia cutout corrente (importante: viewer que entra tarde precisa
+    // saber onde fica o buraco, senao mostra a tela inteira sem webcam nativa).
+    send(ws, { type: "cutout", cutout: room.cutout });
 
     ws.on("message", (raw) => {
       let msg: WsMessage;
@@ -93,6 +93,9 @@ export function attachWebSocketServer(httpServer: Server) {
           micOn: msg.micOn,
           sourceLabel: msg.sourceLabel,
         };
+        broadcastRoom(roomCode, msg);
+      } else if (msg.type === "cutout" && role === "host") {
+        room.cutout = msg.cutout;
         broadcastRoom(roomCode, msg);
       } else if (msg.type === "ping") {
         send(ws, { type: "pong", t: msg.t });

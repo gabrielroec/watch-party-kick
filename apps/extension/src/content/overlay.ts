@@ -1,20 +1,21 @@
+// Overlay injetado na pagina da Kick. Mostra a tela do streamer por cima
+// do player nativo. O "buraco" (cutout) opcional torna uma regiao TRANSPARENTE
+// pra revelar a webcam nativa da Kick por baixo.
+
+import type { ScreenCutout } from "@wpk/shared";
+
 export interface OverlayHandles {
   screenVideoEl: HTMLVideoElement;
-  webcamVideoEl: HTMLVideoElement;
   screenAudioEl: HTMLAudioElement;
-  webcamAudioEl: HTMLAudioElement;
   infoEl: HTMLDivElement;
   statsEl: HTMLDivElement;
-  showWebcam: (visible: boolean) => void;
+  applyCutout: (cutout: ScreenCutout | null) => void;
   updateStats: (fps: number, ping: number, dropped?: number, w?: number, h?: number) => void;
   destroy: () => void;
 }
 
 const HOST_ID = "wpk-overlay-host";
 
-// Cache do container do player da Kick: re-resolve so se desconectar do DOM.
-// findKickPlayer faz queryAll+getBoundingClientRect que sao caros se chamados
-// a cada mutacao do chat (centenas por segundo).
 let cachedKickPlayer: HTMLElement | null = null;
 
 function findKickPlayer(): HTMLElement | null {
@@ -39,6 +40,22 @@ function findKickPlayer(): HTMLElement | null {
   return el;
 }
 
+// Gera a URL de mask SVG dinamica: branco = visivel, preto = transparente.
+// Coordenadas em porcentagem (0-100).
+function makeCutoutMaskUrl(cutout: ScreenCutout | null): string {
+  if (!cutout) return "";
+  const X = (cutout.x * 100).toFixed(2);
+  const Y = (cutout.y * 100).toFixed(2);
+  const W = (cutout.w * 100).toFixed(2);
+  const H = (cutout.h * 100).toFixed(2);
+  const svg =
+    `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='none'>` +
+    `<rect width='100' height='100' fill='white'/>` +
+    `<rect x='${X}' y='${Y}' width='${W}' height='${H}' fill='black'/>` +
+    `</svg>`;
+  return `url("data:image/svg+xml;utf8,${encodeURIComponent(svg)}")`;
+}
+
 export function createOverlay(): OverlayHandles {
   document.getElementById(HOST_ID)?.remove();
 
@@ -54,11 +71,11 @@ export function createOverlay(): OverlayHandles {
     :host, * { box-sizing: border-box; }
     .wrap {
       position: fixed;
-      background: #000;
-      border: 1px solid rgba(255,255,255,0.08);
+      /* SEM background opaco: o cutout fica transparente quando aplicado.
+         O proprio video preenche todo o wrap quando esta tocando. */
+      background: transparent;
       border-radius: 8px;
       overflow: hidden;
-      box-shadow: 0 20px 60px rgba(0,0,0,0.6);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       color: #fff;
     }
@@ -68,22 +85,7 @@ export function createOverlay(): OverlayHandles {
       height: 100%;
       object-fit: contain;
       background: #000;
-    }
-    .webcam-pip {
-      position: absolute;
-      bottom: 12px;
-      right: 12px;
-      width: 22%;
-      aspect-ratio: 16/9;
-      border-radius: 8px;
-      overflow: hidden;
-      border: 2px solid rgba(255,255,255,0.2);
-      box-shadow: 0 4px 16px rgba(0,0,0,0.5);
-      display: none;
-    }
-    .webcam-pip.visible { display: block; }
-    .webcam-pip video {
-      width: 100%; height: 100%; object-fit: cover; display: block;
+      transition: -webkit-mask-image 80ms linear, mask-image 80ms linear;
     }
     .hud {
       position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; align-items: center;
@@ -104,11 +106,13 @@ export function createOverlay(): OverlayHandles {
     .close {
       position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; border-radius: 50%;
       background: rgba(0,0,0,0.55); color: #fff; border: none; cursor: pointer; font-size: 14px;
+      z-index: 2;
     }
     .close:hover { background: rgba(255,60,60,0.8); }
     .muted-toggle {
       position: absolute; bottom: 10px; left: 10px; padding: 6px 10px; border-radius: 6px;
       background: rgba(0,0,0,0.55); color: #fff; border: none; cursor: pointer; font-size: 12px;
+      z-index: 2;
     }
   `;
   shadow.appendChild(style);
@@ -116,34 +120,17 @@ export function createOverlay(): OverlayHandles {
   const wrap = document.createElement("div");
   wrap.className = "wrap";
 
-  // Tela do streamer — video principal.
   const screenVideo = document.createElement("video");
   screenVideo.className = "screen-video";
   screenVideo.autoplay = true;
   screenVideo.playsInline = true;
   screenVideo.muted = true;
-  // Hints que mantem Chrome no path de HW decode + reduzem overhead:
   screenVideo.disablePictureInPicture = true;
   screenVideo.disableRemotePlayback = true;
   (screenVideo as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
 
-  // Webcam PiP sobre a tela.
-  const webcamWrap = document.createElement("div");
-  webcamWrap.className = "webcam-pip";
-  const webcamVideo = document.createElement("video");
-  webcamVideo.autoplay = true;
-  webcamVideo.playsInline = true;
-  webcamVideo.muted = true;
-  webcamVideo.disablePictureInPicture = true;
-  webcamVideo.disableRemotePlayback = true;
-  (webcamVideo as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
-  webcamWrap.appendChild(webcamVideo);
-
-  // Audio elements separados (LiveKit envia tracks de audio independentes).
   const screenAudio = document.createElement("audio");
   screenAudio.autoplay = true;
-  const webcamAudio = document.createElement("audio");
-  webcamAudio.autoplay = true;
 
   const hud = document.createElement("div");
   hud.className = "hud";
@@ -165,9 +152,7 @@ export function createOverlay(): OverlayHandles {
   muteBtn.addEventListener("click", () => {
     audioMuted = !audioMuted;
     screenAudio.muted = audioMuted;
-    webcamAudio.muted = audioMuted;
-    screenVideo.muted = true; // video element sempre mudo
-    webcamVideo.muted = true;
+    screenVideo.muted = true;
     muteBtn.textContent = audioMuted ? "Som: OFF" : "Som: ON";
   });
 
@@ -175,9 +160,7 @@ export function createOverlay(): OverlayHandles {
   dragHandle.className = "drag-handle";
 
   wrap.appendChild(screenVideo);
-  wrap.appendChild(webcamWrap);
   wrap.appendChild(screenAudio);
-  wrap.appendChild(webcamAudio);
   wrap.appendChild(hud);
   wrap.appendChild(statsEl);
   wrap.appendChild(dragHandle);
@@ -185,8 +168,6 @@ export function createOverlay(): OverlayHandles {
   wrap.appendChild(muteBtn);
   shadow.appendChild(wrap);
 
-  // Posiciona via transform (GPU composito) + width/height. Evita o
-  // layout-thrash de setar left/top em pixel toda hora.
   let lastX = -1, lastY = -1, lastW = -1, lastH = -1;
   function positionOverPlayer() {
     const player = findKickPlayer();
@@ -218,9 +199,6 @@ export function createOverlay(): OverlayHandles {
   }
   positionOverPlayer();
 
-  // rAF-debounce: nao roda mais de 1x por frame, mesmo se mutation observer
-  // dispara 100x/seg (o chat da Kick faz isso). Crucial: sem isso, o overlay
-  // sozinho derruba o framerate do navegador.
   let rafScheduled = false;
   function schedulePosition() {
     if (rafScheduled) return;
@@ -236,14 +214,11 @@ export function createOverlay(): OverlayHandles {
   window.addEventListener("resize", schedulePosition);
   window.addEventListener("scroll", schedulePosition, { passive: true });
 
-  // MutationObserver escopado: olha apenas o player (e seu container imediato).
-  // O original observava document.body inteiro — dispara em cada msg de chat.
   const playerRoot = findKickPlayer()?.parentElement ?? document.body;
   const mo = new MutationObserver(schedulePosition);
   mo.observe(playerRoot, { childList: true, subtree: false, attributes: true, attributeFilter: ["style", "class"] });
 
-  // Drag (so em modo PiP). Usa transform tambem pra ficar consistente com
-  // o positioning principal e nao causar reflow.
+  // Drag em modo PiP
   let dragging = false;
   let dragStartX = 0, dragStartY = 0, dragStartLeft = 0, dragStartTop = 0;
   dragHandle.addEventListener("mousedown", (e) => {
@@ -263,8 +238,15 @@ export function createOverlay(): OverlayHandles {
 
   closeBtn.addEventListener("click", () => destroy());
 
-  function showWebcam(visible: boolean) {
-    webcamWrap.classList.toggle("visible", visible);
+  function applyCutout(cutout: ScreenCutout | null) {
+    const url = makeCutoutMaskUrl(cutout);
+    // Aplica em ambos prefixos pra cobrir Chromium e Safari.
+    screenVideo.style.maskImage = url;
+    (screenVideo.style as CSSStyleDeclaration & { webkitMaskImage?: string }).webkitMaskImage = url;
+    screenVideo.style.maskSize = "100% 100%";
+    (screenVideo.style as CSSStyleDeclaration & { webkitMaskSize?: string }).webkitMaskSize = "100% 100%";
+    screenVideo.style.maskRepeat = "no-repeat";
+    (screenVideo.style as CSSStyleDeclaration & { webkitMaskRepeat?: string }).webkitMaskRepeat = "no-repeat";
   }
 
   function updateStats(fps: number, ping: number, dropped = 0, w = 0, h = 0) {
@@ -286,12 +268,10 @@ export function createOverlay(): OverlayHandles {
 
   return {
     screenVideoEl: screenVideo,
-    webcamVideoEl: webcamVideo,
     screenAudioEl: screenAudio,
-    webcamAudioEl: webcamAudio,
     infoEl,
     statsEl,
-    showWebcam,
+    applyCutout,
     updateStats,
     destroy,
   };

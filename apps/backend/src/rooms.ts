@@ -2,24 +2,25 @@
 // MVP: store in-memory. Producao depois migra pra Redis/Postgres para
 // permitir cluster multi-no e persistencia de auditoria.
 
-import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type ParticipantRole } from "@wpk/shared";
+import { ROOM_CODE_ALPHABET, ROOM_CODE_LENGTH, type ParticipantRole, type ScreenCutout } from "@wpk/shared";
 
 export interface Room {
   code: string;
   createdAt: number;
-  hostIdentity: string | null;  // preenchido quando o host se conecta
-  camIdentity: string | null;   // pareada com hostIdentity; LiveKit-only, sem WS
-  viewers: Set<string>;          // identidades conectadas ao WS
+  hostIdentity: string | null;
+  viewers: Set<string>;
   hostState: {
     webcamOn: boolean;
     micOn: boolean;
-    sourceLabel: string | null;  // nome amigavel da fonte (ex.: "Janela: VLC")
+    sourceLabel: string | null;
   };
+  // Retangulo do "buraco" no overlay que o viewer aplica via SVG mask.
+  // Persistido na sala pra viewers que entram tarde receberem o estado atual.
+  cutout: ScreenCutout | null;
 }
 
 const rooms = new Map<string, Room>();
 
-// Gera codigo curto e legivel. Retenta se colidir (improvavel com 32^6).
 export function createRoom(customCode?: string): Room {
   let code = "";
   if (customCode) {
@@ -37,9 +38,9 @@ export function createRoom(customCode?: string): Room {
     code,
     createdAt: Date.now(),
     hostIdentity: null,
-    camIdentity: null,
     viewers: new Set(),
     hostState: { webcamOn: false, micOn: false, sourceLabel: null },
+    cutout: null,
   };
   rooms.set(code, room);
   return room;
@@ -49,26 +50,12 @@ export function getRoom(code: string): Room | undefined {
   return rooms.get(code.toUpperCase());
 }
 
-// Identidade unica por participante. Como nao temos login, geramos random.
-// O identity e importante pro LiveKit nao permitir 2 conexoes da mesma identity.
 export function makeIdentity(role: ParticipantRole): string {
   const rand = Math.random().toString(36).slice(2, 10);
   return `${role}-${rand}`;
 }
 
-// Para o host com 2 PeerConnections (screen + cam em rooms LiveKit separadas
-// mas mesmo roomCode), geramos par compartilhando o mesmo nonce. Ambas tem
-// prefixo distinto pra LiveKit aceitar como participantes diferentes.
-export function makeHostIdentities(): { mainIdentity: string; camIdentity: string } {
-  const nonce = Math.random().toString(36).slice(2, 10);
-  return {
-    mainIdentity: `host-${nonce}`,
-    camIdentity: `cam-${nonce}`,
-  };
-}
-
 // Limpeza periodica de salas abandonadas (sem host e sem viewers).
-// Evita vazamento de memoria em processos de longa duracao.
 setInterval(() => {
   const now = Date.now();
   for (const [code, room] of rooms) {

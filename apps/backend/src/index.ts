@@ -13,7 +13,7 @@ import express from "express";
 import cors from "cors";
 import { z } from "zod";
 import { config } from "./config.js";
-import { createRoom, getRoom, makeIdentity, makeHostIdentities } from "./rooms.js";
+import { createRoom, getRoom, makeIdentity } from "./rooms.js";
 import { issueLivekitToken } from "./livekit.js";
 import { attachWebSocketServer } from "./ws.js";
 import type { CreateRoomResponse, JoinRoomResponse } from "@wpk/shared";
@@ -46,30 +46,21 @@ app.post("/api/rooms", async (req, res) => {
   const customCode = parsed.success ? parsed.data.code?.toUpperCase() : undefined;
   const room = createRoom(customCode);
 
-  // Par de identidades pro host: main = screen+audio, cam = webcam pura.
-  // Ambas conectam no MESMO roomCode LiveKit mas com identidades distintas,
-  // pra LiveKit aceitar como 2 participantes (e o navegador ter 2 PCs com
-  // congestion controllers independentes — uplink da webcam nao mata a screen).
-  const { mainIdentity, camIdentity } = makeHostIdentities();
-  room.camIdentity = camIdentity;
+  // Webcam removida do pipeline — 100% do encoder budget no screen share.
+  // Viewer ve a webcam nativa da Kick atraves de um cutout no overlay.
+  const identity = makeIdentity("host");
+  const livekitToken = await issueLivekitToken({
+    roomCode: room.code,
+    identity,
+    role: "host",
+  });
 
-  const [mainToken, camToken] = await Promise.all([
-    issueLivekitToken({ roomCode: room.code, identity: mainIdentity, role: "host" }),
-    issueLivekitToken({ roomCode: room.code, identity: camIdentity, role: "host" }),
-  ]);
-
-  // Mantemos livekitToken/identity/role apontando pro MAIN pra clientes legados
-  // continuarem funcionando. camToken/camIdentity sao campos novos.
   const body: CreateRoomResponse = {
     roomCode: room.code,
     livekitUrl: config.livekit.url,
-    livekitToken: mainToken,
-    identity: mainIdentity,
+    livekitToken,
+    identity,
     role: "host",
-    mainToken,
-    mainIdentity,
-    camToken,
-    camIdentity,
   };
   res.json(body);
 });

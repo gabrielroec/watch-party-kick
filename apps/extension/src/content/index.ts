@@ -9,26 +9,17 @@ let currentWs: WebSocket | null = null;
 
 function attachTrack(track: RemoteTrack, pub: RemoteTrackPublication, overlay: OverlayHandles) {
   const name = pub.trackName || "";
-  const isScreen = name.startsWith("wpk-screen");
-  const isWebcam = name.startsWith("wpk-webcam");
+  const isScreen = name.startsWith("wpk-screen") || pub.source === Track.Source.ScreenShare;
 
   if (track.kind === Track.Kind.Video) {
-    if (isScreen || (!isScreen && !isWebcam)) {
+    if (isScreen) {
       track.attach(overlay.screenVideoEl);
       overlay.screenVideoEl.play().catch(() => {});
-    } else if (isWebcam) {
-      track.attach(overlay.webcamVideoEl);
-      overlay.webcamVideoEl.play().catch(() => {});
-      overlay.showWebcam(true);
     }
   } else if (track.kind === Track.Kind.Audio) {
-    if (isScreen || name === "wpk-screen-audio") {
-      track.attach(overlay.screenAudioEl);
-      overlay.screenAudioEl.play().catch(() => {});
-    } else {
-      track.attach(overlay.webcamAudioEl);
-      overlay.webcamAudioEl.play().catch(() => {});
-    }
+    // Todo audio vai pro screenAudioEl (so existe screen audio agora).
+    track.attach(overlay.screenAudioEl);
+    overlay.screenAudioEl.play().catch(() => {});
   }
 }
 
@@ -45,13 +36,8 @@ async function startSession(session: JoinRoomResponse) {
     attachTrack(track, pub, currentOverlay);
   });
 
-  currentRoom.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, pub: RemoteTrackPublication) => {
+  currentRoom.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack) => {
     track.detach();
-    if (!currentOverlay) return;
-    const name = pub.trackName || "";
-    if (pub.source === Track.Source.Camera || name === "webcam") {
-      currentOverlay.showWebcam(false);
-    }
   });
 
   currentRoom.on(RoomEvent.Disconnected, () => {
@@ -69,7 +55,6 @@ async function startSession(session: JoinRoomResponse) {
 
   const statsInterval = setInterval(() => {
     if (!overlay || !room) { clearInterval(statsInterval); return; }
-    // Skip quando tab oculta — economiza CPU sem custo (stats nao sao visiveis).
     if (document.hidden) return;
 
     const q = overlay.screenVideoEl.getVideoPlaybackQuality?.();
@@ -92,27 +77,17 @@ async function startSession(session: JoinRoomResponse) {
     overlay.updateStats(fps, rtt, dropped, w, h);
   }, 1000);
 
-  // PAUSA o player nativo da Kick. So mutar nao basta — o decoder continua
-  // rodando e consumindo CPU/GPU, competindo com o decoder do overlay e
-  // derrubando o framerate da watch party.
-  const pausedKickVideos = new WeakSet<HTMLVideoElement>();
-  function pauseKickVideos() {
-    document.querySelectorAll("video").forEach((v) => {
-      if (!currentOverlay) return;
-      if (v === currentOverlay.screenVideoEl || v === currentOverlay.webcamVideoEl) return;
-      if (pausedKickVideos.has(v)) return;
-      try {
-        v.muted = true;
-        v.pause();
-        pausedKickVideos.add(v);
-      } catch { /* noop */ }
-    });
-  }
-  pauseKickVideos();
-  // A Kick re-cria <video> em algumas transicoes — re-pausa periodicamente
-  // mas com intervalo gentil (2s) pra nao virar fonte de overhead tambem.
-  const repauseInterval = setInterval(pauseKickVideos, 2000);
-  currentRoom.on(RoomEvent.Disconnected, () => clearInterval(repauseInterval));
+  // Pausa player nativo da Kick (libera decoder). MAS deixa rodando se houver
+  // cutout aplicado — o viewer ve a webcam atraves do buraco e precisa do player
+  // ativo (com som mutado). Estrategia: SEMPRE muta, NUNCA pausa.
+  const kickVideos = document.querySelectorAll("video");
+  kickVideos.forEach((v) => {
+    if (!currentOverlay) return;
+    if (v === currentOverlay.screenVideoEl) return;
+    try {
+      (v as HTMLVideoElement).muted = true;
+    } catch { /* noop */ }
+  });
 
   // WS de controle.
   const wsUrl = BACKEND_URL.replace(/^http/, "ws") +
@@ -126,6 +101,8 @@ async function startSession(session: JoinRoomResponse) {
       if (!currentOverlay) return;
       if (msg.type === "presence") {
         currentOverlay.infoEl.textContent = `sala ${session.roomCode} · ${msg.viewers} viewer${msg.viewers === 1 ? "" : "s"}`;
+      } else if (msg.type === "cutout") {
+        currentOverlay.applyCutout(msg.cutout);
       }
     } catch { /* ignore */ }
   };
