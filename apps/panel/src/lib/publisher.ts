@@ -101,13 +101,11 @@ export async function connectAsPublisher(params: {
         p.encodings[0].maxFramerate = opts.maxFramerate;
         p.encodings[0].priority = opts.kind === "screen" ? "high" : "low";
         p.encodings[0].networkPriority = opts.kind === "screen" ? "high" : "low";
-        if (opts.kind === "screen") {
-          p.encodings[0].scaleResolutionDownBy = 1.0;
-          p.degradationPreference = "maintain-resolution";
-        } else {
-          delete p.encodings[0].scaleResolutionDownBy;
-          p.degradationPreference = "maintain-framerate";
-        }
+        // maintain-framerate em ambos: sob pressao o encoder reduz resolucao
+        // (1080p -> 900p -> 720p) ao inves de cortar FPS. Watch party prioriza
+        // fluidez sobre nitidez de texto.
+        delete p.encodings[0].scaleResolutionDownBy;
+        p.degradationPreference = "maintain-framerate";
         await sender.setParameters(p);
       }
     } catch (e) {
@@ -120,25 +118,44 @@ export async function connectAsPublisher(params: {
 
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      videoTrack.contentHint = "detail";
+      // 'motion' biases rate control pra fluidez (60fps) ao inves de nitidez
+      // de texto. Pra watch party (videos/games) e o correto.
+      videoTrack.contentHint = "motion";
 
       await videoTrack.applyConstraints({
         width: { ideal: 1920 },
         height: { ideal: 1080 },
-        frameRate: { ideal: 60 },
+        frameRate: { ideal: 60, max: 60 },
       }).catch((e) => console.warn("[publisher] screen applyConstraints failed", e));
 
+      // Diagnostico: se frameRate.max reportar 30, o usuario escolheu uma
+      // janela/tela e bateu no cap de 30fps do DesktopCaptureDevice do
+      // Chrome. Pra exceder, precisa compartilhar uma ABA do Chrome.
+      try {
+        const caps = (videoTrack.getCapabilities?.() ?? {}) as MediaTrackCapabilities;
+        const settings = videoTrack.getSettings();
+        console.info("[publisher] screen track caps/settings", {
+          surface: (settings as { displaySurface?: string }).displaySurface,
+          capsFrameRateMax: (caps as { frameRate?: { max?: number } }).frameRate?.max,
+          settingsFrameRate: settings.frameRate,
+          settingsWidth: settings.width,
+          settingsHeight: settings.height,
+        });
+      } catch { /* noop */ }
+
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
-      // Cada Room publica 1 video apenas, entao o hack antigo de trocar
-      // Camera<>ScreenShare nao e mais necessario.
       const pub = await screenRoom.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
         source: Track.Source.ScreenShare,
-        videoEncoding: { maxBitrate: 8_000_000, maxFramerate: 60, priority: "high" as any },
+        // H264 ativa HARDWARE encode (VideoToolbox/MFT/VA-API) E decode
+        // no viewer (libvpx VP8 nao tem HW decode no desktop). Diferenca
+        // gigante: CPU encode cai ~70%, viewer decode cai similarmente.
+        videoCodec: "h264",
+        videoEncoding: { maxBitrate: 6_000_000, maxFramerate: 60, priority: "high" as any },
         simulcast: false,
       });
       screenVideoSid = pub.trackSid;
-      await applyStableParams(pub, { kind: "screen", maxBitrate: 8_000_000, maxFramerate: 60 });
+      await applyStableParams(pub, { kind: "screen", maxBitrate: 6_000_000, maxFramerate: 60 });
     }
 
     const audioTrack = stream.getAudioTracks()[0];

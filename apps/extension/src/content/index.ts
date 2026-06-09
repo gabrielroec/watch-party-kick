@@ -69,6 +69,8 @@ async function startSession(session: JoinRoomResponse) {
 
   const statsInterval = setInterval(() => {
     if (!overlay || !room) { clearInterval(statsInterval); return; }
+    // Skip quando tab oculta — economiza CPU sem custo (stats nao sao visiveis).
+    if (document.hidden) return;
 
     const q = overlay.screenVideoEl.getVideoPlaybackQuality?.();
     const now = performance.now();

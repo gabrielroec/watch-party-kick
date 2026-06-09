@@ -77,16 +77,34 @@ export default function PanelPage() {
     setBusy("screen");
     setErrorMsg(null);
     try {
+      // displaySurface: 'browser' sugere o picker abrir na aba "Aba do Chrome".
+      // Window/screen capture do Chrome esta hard-capped em 30fps. Apenas
+      // tab capture (WebContentsVideoCaptureDevice) entrega 60fps. Sugestao,
+      // nao obrigatorio — o usuario ainda pode escolher janela/tela e cair
+      // pro caminho de 30fps.
       const stream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           frameRate: { ideal: 60, max: 60 },
           width: { ideal: 1920, max: 1920 },
           height: { ideal: 1080, max: 1080 },
-        },
+          displaySurface: "browser",
+        } as MediaTrackConstraints & { displaySurface?: string },
         audio: withAudio,
-      });
+        selfBrowserSurface: "include",
+        surfaceSwitching: "include",
+      } as DisplayMediaStreamOptions & { selfBrowserSurface?: string; surfaceSwitching?: string });
       const track = stream.getVideoTracks()[0];
       if (!track) { stream.getTracks().forEach((t) => t.stop()); setBusy(null); return; }
+
+      // Avisa se caiu no path de 30fps (window/screen capture).
+      const settings = track.getSettings() as MediaTrackSettings & { displaySurface?: string };
+      if (settings.displaySurface && settings.displaySurface !== "browser") {
+        setErrorMsg(
+          `Atencao: voce escolheu '${settings.displaySurface}'. Chrome limita janela/tela a 30fps. ` +
+          `Pra 60fps, compartilhe uma ABA do Chrome (recarregue e escolha "Aba do Chrome").`,
+        );
+      }
+
       track.addEventListener("ended", () => {
         setScreenStream(null);
         publisherRef.current?.stopScreenShare();

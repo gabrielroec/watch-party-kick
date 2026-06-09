@@ -122,6 +122,10 @@ export function createOverlay(): OverlayHandles {
   screenVideo.autoplay = true;
   screenVideo.playsInline = true;
   screenVideo.muted = true;
+  // Hints que mantem Chrome no path de HW decode + reduzem overhead:
+  screenVideo.disablePictureInPicture = true;
+  screenVideo.disableRemotePlayback = true;
+  (screenVideo as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
 
   // Webcam PiP sobre a tela.
   const webcamWrap = document.createElement("div");
@@ -130,6 +134,9 @@ export function createOverlay(): OverlayHandles {
   webcamVideo.autoplay = true;
   webcamVideo.playsInline = true;
   webcamVideo.muted = true;
+  webcamVideo.disablePictureInPicture = true;
+  webcamVideo.disableRemotePlayback = true;
+  (webcamVideo as HTMLVideoElement & { preservesPitch?: boolean }).preservesPitch = false;
   webcamWrap.appendChild(webcamVideo);
 
   // Audio elements separados (LiveKit envia tracks de audio independentes).
