@@ -90,12 +90,27 @@ async function startSession(session: JoinRoomResponse) {
     overlay.updateStats(fps, rtt, dropped, w, h);
   }, 1000);
 
-  // Muta player da Kick pra nao duplicar audio.
-  const kickVideos = document.querySelectorAll("video");
-  kickVideos.forEach((v) => {
-    if (!currentOverlay || v === currentOverlay.screenVideoEl || v === currentOverlay.webcamVideoEl) return;
-    try { (v as HTMLVideoElement).muted = true; } catch { /* noop */ }
-  });
+  // PAUSA o player nativo da Kick. So mutar nao basta — o decoder continua
+  // rodando e consumindo CPU/GPU, competindo com o decoder do overlay e
+  // derrubando o framerate da watch party.
+  const pausedKickVideos = new WeakSet<HTMLVideoElement>();
+  function pauseKickVideos() {
+    document.querySelectorAll("video").forEach((v) => {
+      if (!currentOverlay) return;
+      if (v === currentOverlay.screenVideoEl || v === currentOverlay.webcamVideoEl) return;
+      if (pausedKickVideos.has(v)) return;
+      try {
+        v.muted = true;
+        v.pause();
+        pausedKickVideos.add(v);
+      } catch { /* noop */ }
+    });
+  }
+  pauseKickVideos();
+  // A Kick re-cria <video> em algumas transicoes — re-pausa periodicamente
+  // mas com intervalo gentil (2s) pra nao virar fonte de overhead tambem.
+  const repauseInterval = setInterval(pauseKickVideos, 2000);
+  currentRoom.on(RoomEvent.Disconnected, () => clearInterval(repauseInterval));
 
   // WS de controle.
   const wsUrl = BACKEND_URL.replace(/^http/, "ws") +

@@ -69,7 +69,11 @@ export default function PanelPage() {
     setErrorMsg(null);
     try {
       const stream = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 120 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: {
+          frameRate: { ideal: 60, max: 60 },
+          width: { ideal: 1920, max: 1920 },
+          height: { ideal: 1080, max: 1080 },
+        },
         audio: withAudio,
       });
       const track = stream.getVideoTracks()[0];
@@ -101,7 +105,11 @@ export default function PanelPage() {
     setErrorMsg(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 60, min: 30 } },
+        video: {
+          width: { ideal: 1280, max: 1280 },
+          height: { ideal: 720, max: 720 },
+          frameRate: { ideal: 30, max: 30 },
+        },
         audio: true,
       });
       setWebcamStream(stream);

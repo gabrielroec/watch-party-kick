@@ -25,9 +25,8 @@ app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
-      // Extensao roda em chrome-extension://<id> e a lista e dinamica;
-      // em dev liberamos todos os chrome-extension e os origins declarados.
       if (origin.startsWith("chrome-extension://")) return cb(null, true);
+      if (origin.endsWith(".vercel.app")) return cb(null, true);
       if (config.allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error(`origin nao permitida: ${origin}`));
     },

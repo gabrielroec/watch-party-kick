@@ -21,7 +21,7 @@ export async function connectAsPublisher(params: {
 }): Promise<PublisherHandle> {
   const room = new Room({
     adaptiveStream: false,
-    dynacast: false,
+    dynacast: true,
   });
 
   room.on(RoomEvent.Disconnected, () => {
@@ -44,20 +44,23 @@ export async function connectAsPublisher(params: {
     }
   }
 
-  async function forceMaxParams(pub: any) {
+  // Aplica params estaveis no sender: bitrate sustentavel + degradation que
+  // SACRIFICA resolucao pra manter framerate. "disabled" era o killer principal.
+  async function applyStableParams(pub: any, opts: { maxBitrate: number; maxFramerate: number }) {
     try {
       const sender = pub.track?.sender;
       if (!sender) return;
       const params = sender.getParameters();
       if (params.encodings?.[0]) {
-        params.encodings[0].maxBitrate = 15_000_000;
-        params.encodings[0].maxFramerate = 120;
+        params.encodings[0].maxBitrate = opts.maxBitrate;
+        params.encodings[0].maxFramerate = opts.maxFramerate;
         params.encodings[0].scaleResolutionDownBy = 1.0;
-        params.degradationPreference = "disabled";
-        delete params.encodings[0].adaptivePtime;
+        params.degradationPreference = "maintain-framerate";
         await sender.setParameters(params);
       }
-    } catch {}
+    } catch (e) {
+      console.warn("[publisher] applyStableParams failed", e);
+    }
   }
 
   async function startScreenShare(stream: MediaStream) {
@@ -65,22 +68,28 @@ export async function connectAsPublisher(params: {
 
     const videoTrack = stream.getVideoTracks()[0];
     if (videoTrack) {
-      videoTrack.contentHint = "motion";
+      // 'detail' otimiza pra texto/UI; "motion" jogaria CPU em blur desnecessario
+      videoTrack.contentHint = "detail";
+
+      // Sem 'min' — getDisplayMedia/applyConstraints lancam OverconstrainedError
+      // silenciosamente se nao bater, deixando o track em estado degradado.
       await videoTrack.applyConstraints({
-        width: { ideal: 1920, min: 1280 },
-        height: { ideal: 1080, min: 720 },
-        frameRate: { ideal: 120, min: 60 },
-      }).catch(() => {});
+        width: { ideal: 1920 },
+        height: { ideal: 1080 },
+        frameRate: { ideal: 60 },
+      }).catch((e) => console.warn("[publisher] screen applyConstraints failed", e));
 
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-screen",
+        // Source.Camera é hack proposital: contorna o limite de 15fps que o
+        // Chromium aplica a ScreenShare. NAO trocar pra ScreenShare.
         source: Track.Source.Camera,
-        videoEncoding: { maxBitrate: 15_000_000, maxFramerate: 120 },
+        videoEncoding: { maxBitrate: 8_000_000, maxFramerate: 60 },
         simulcast: false,
       });
       screenVideoSid = pub.trackSid;
-      await forceMaxParams(pub);
+      await applyStableParams(pub, { maxBitrate: 8_000_000, maxFramerate: 60 });
     }
 
     const audioTrack = stream.getAudioTracks()[0];
@@ -108,20 +117,22 @@ export async function connectAsPublisher(params: {
     if (videoTrack) {
       videoTrack.contentHint = "motion";
       await videoTrack.applyConstraints({
-        width: { ideal: 1280, min: 720 },
-        height: { ideal: 720, min: 480 },
-        frameRate: { ideal: 60, min: 30 },
-      }).catch(() => {});
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 30 },
+      }).catch((e) => console.warn("[publisher] webcam applyConstraints failed", e));
 
       const lk = new LocalVideoTrack(videoTrack, undefined, false);
       const pub = await room.localParticipant.publishTrack(lk, {
         name: "wpk-webcam",
+        // ScreenShare aqui é proposital — pareado com o swap acima pra
+        // diferenciar tracks. A extensao usa o NOME (wpk-webcam) pra rotear.
         source: Track.Source.ScreenShare,
-        videoEncoding: { maxBitrate: 5_000_000, maxFramerate: 60 },
+        videoEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
         simulcast: false,
       });
       webcamVideoSid = pub.trackSid;
-      await forceMaxParams(pub);
+      await applyStableParams(pub, { maxBitrate: 2_500_000, maxFramerate: 30 });
     }
 
     const audioTrack = stream.getAudioTracks()[0];

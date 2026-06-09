@@ -12,7 +12,13 @@ export interface OverlayHandles {
 
 const HOST_ID = "wpk-overlay-host";
 
+// Cache do container do player da Kick: re-resolve so se desconectar do DOM.
+// findKickPlayer faz queryAll+getBoundingClientRect que sao caros se chamados
+// a cada mutacao do chat (centenas por segundo).
+let cachedKickPlayer: HTMLElement | null = null;
+
 function findKickPlayer(): HTMLElement | null {
+  if (cachedKickPlayer && cachedKickPlayer.isConnected) return cachedKickPlayer;
   const videos = Array.from(document.querySelectorAll("video"));
   let best: HTMLVideoElement | null = null;
   let bestArea = 0;
@@ -22,13 +28,14 @@ function findKickPlayer(): HTMLElement | null {
     const area = r.width * r.height;
     if (area > bestArea) { best = v; bestArea = area; }
   }
-  if (!best) return null;
+  if (!best) { cachedKickPlayer = null; return null; }
   let el: HTMLElement | null = best;
   for (let i = 0; i < 4 && el; i++) {
     const r = el.getBoundingClientRect();
     if (r.width >= bestArea / 1.2) break;
     el = el.parentElement;
   }
+  cachedKickPlayer = el;
   return el;
 }
 
@@ -171,50 +178,79 @@ export function createOverlay(): OverlayHandles {
   wrap.appendChild(muteBtn);
   shadow.appendChild(wrap);
 
+  // Posiciona via transform (GPU composito) + width/height. Evita o
+  // layout-thrash de setar left/top em pixel toda hora.
+  let lastX = -1, lastY = -1, lastW = -1, lastH = -1;
   function positionOverPlayer() {
     const player = findKickPlayer();
+    let x: number, y: number, w: number, h: number, mode: string;
     if (player) {
       const r = player.getBoundingClientRect();
-      wrap.style.left = `${r.left + window.scrollX}px`;
-      wrap.style.top = `${r.top + window.scrollY}px`;
-      wrap.style.width = `${r.width}px`;
-      wrap.style.height = `${r.height}px`;
-      wrap.dataset.mode = "cover";
+      x = r.left + window.scrollX;
+      y = r.top + window.scrollY;
+      w = r.width;
+      h = r.height;
+      mode = "cover";
     } else {
-      wrap.style.left = "auto";
-      wrap.style.right = "24px";
-      wrap.style.top = "auto";
-      wrap.style.bottom = "24px";
-      wrap.style.width = "640px";
-      wrap.style.height = "360px";
-      wrap.dataset.mode = "pip";
+      x = window.innerWidth - 664;
+      y = window.innerHeight - 384;
+      w = 640;
+      h = 360;
+      mode = "pip";
     }
+    if (x === lastX && y === lastY && w === lastW && h === lastH) return;
+    lastX = x; lastY = y; lastW = w; lastH = h;
+    wrap.style.transform = `translate3d(${x}px, ${y}px, 0)`;
+    wrap.style.width = `${w}px`;
+    wrap.style.height = `${h}px`;
+    wrap.style.left = "0";
+    wrap.style.top = "0";
+    wrap.style.right = "auto";
+    wrap.style.bottom = "auto";
+    wrap.dataset.mode = mode;
   }
   positionOverPlayer();
 
-  const ro = new ResizeObserver(positionOverPlayer);
-  ro.observe(document.documentElement);
-  window.addEventListener("resize", positionOverPlayer);
-  window.addEventListener("scroll", positionOverPlayer, { passive: true });
-  const mo = new MutationObserver(() => positionOverPlayer());
-  mo.observe(document.body, { childList: true, subtree: true });
+  // rAF-debounce: nao roda mais de 1x por frame, mesmo se mutation observer
+  // dispara 100x/seg (o chat da Kick faz isso). Crucial: sem isso, o overlay
+  // sozinho derruba o framerate do navegador.
+  let rafScheduled = false;
+  function schedulePosition() {
+    if (rafScheduled) return;
+    rafScheduled = true;
+    requestAnimationFrame(() => {
+      rafScheduled = false;
+      positionOverPlayer();
+    });
+  }
 
-  // Drag.
+  const ro = new ResizeObserver(schedulePosition);
+  ro.observe(document.documentElement);
+  window.addEventListener("resize", schedulePosition);
+  window.addEventListener("scroll", schedulePosition, { passive: true });
+
+  // MutationObserver escopado: olha apenas o player (e seu container imediato).
+  // O original observava document.body inteiro — dispara em cada msg de chat.
+  const playerRoot = findKickPlayer()?.parentElement ?? document.body;
+  const mo = new MutationObserver(schedulePosition);
+  mo.observe(playerRoot, { childList: true, subtree: false, attributes: true, attributeFilter: ["style", "class"] });
+
+  // Drag (so em modo PiP). Usa transform tambem pra ficar consistente com
+  // o positioning principal e nao causar reflow.
   let dragging = false;
-  let startX = 0, startY = 0, startLeft = 0, startTop = 0;
+  let dragStartX = 0, dragStartY = 0, dragStartLeft = 0, dragStartTop = 0;
   dragHandle.addEventListener("mousedown", (e) => {
     if (wrap.dataset.mode !== "pip") return;
     dragging = true;
-    startX = e.clientX; startY = e.clientY;
-    const r = wrap.getBoundingClientRect();
-    startLeft = r.left; startTop = r.top;
+    dragStartX = e.clientX; dragStartY = e.clientY;
+    dragStartLeft = lastX; dragStartTop = lastY;
     e.preventDefault();
   });
   window.addEventListener("mousemove", (e) => {
     if (!dragging) return;
-    wrap.style.left = `${startLeft + (e.clientX - startX)}px`;
-    wrap.style.top = `${startTop + (e.clientY - startY)}px`;
-    wrap.style.right = "auto"; wrap.style.bottom = "auto";
+    lastX = dragStartLeft + (e.clientX - dragStartX);
+    lastY = dragStartTop + (e.clientY - dragStartY);
+    wrap.style.transform = `translate3d(${lastX}px, ${lastY}px, 0)`;
   });
   window.addEventListener("mouseup", () => { dragging = false; });
 
