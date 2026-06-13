@@ -1,15 +1,14 @@
-// Manifest MV3 gerado programaticamente via CRXJS.
 import { defineManifest } from "@crxjs/vite-plugin";
 
 export default defineManifest({
   manifest_version: 3,
-  name: "Watch Party Kick",
-  version: "0.1.0",
+  name: "Watch Party",
+  version: "0.2.0",
   description:
-    "Watch party sobre a Kick: cole o código da sala e veja a tela do streamer sobre o player, sem atrapalhar a stream.",
+    "Janela flutuante pra assistir junto com seu streamer favorito sobre qualquer página.",
   action: {
     default_popup: "src/popup/index.html",
-    default_title: "Watch Party Kick",
+    default_title: "Watch Party",
   },
   icons: {
     16: "icons/icon-16.png",
@@ -24,20 +23,14 @@ export default defineManifest({
   host_permissions: [
     "https://watchpartykick.duckdns.org/*",
     "wss://watchpartykick.duckdns.org/*",
-    "https://*.kick.com/*",
+    "<all_urls>",
   ],
   content_scripts: [
     {
-      matches: ["https://*.kick.com/*"],
+      matches: ["<all_urls>"],
       js: ["src/content/index.ts"],
       run_at: "document_idle",
       all_frames: false,
-    },
-  ],
-  web_accessible_resources: [
-    {
-      resources: ["assets/*", "icons/*"],
-      matches: ["https://*.kick.com/*"],
     },
   ],
 });
