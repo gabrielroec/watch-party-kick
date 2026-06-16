@@ -56,8 +56,16 @@ if ! ls "$APP_DIR"/node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlit
   cd "$APP_DIR"
 fi
 
-log "4) Buildando backend"
+log "4) Buildando @wpk/shared (precisa antes do backend)"
+pnpm --filter @wpk/shared build
+
+log "4.1) Buildando backend"
 pnpm --filter @wpk/backend build
+
+# Sanity: o backend compilado tem que importar @wpk/shared do dist, não .ts
+if grep -rq "packages/shared/src" "$APP_DIR/apps/backend/dist/" 2>/dev/null; then
+  fail "Backend compilado ainda referencia packages/shared/src — algo errado no resolve."
+fi
 
 log "5) Garantindo storage em $STORAGE_DIR"
 mkdir -p "$STORAGE_DIR/recordings"
