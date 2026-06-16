@@ -103,26 +103,35 @@ set_env() {
   fi
 }
 
-# Procura LIVEKIT_* em qualquer .env do sistema se nosso ENV_FILE ainda não tem
+# Procura LIVEKIT_* em qualquer .env OU arquivo de service systemd se nosso ENV_FILE ainda não tem
 if ! grep -q "^LIVEKIT_URL=" "$ENV_FILE" 2>/dev/null; then
-  log "Procurando LIVEKIT_* em .env antigos..."
-  SRC_ENV=""
+  log "Procurando LIVEKIT_* em qualquer arquivo do sistema..."
+  # Procura arquivos que tenham qualquer dos formatos:
+  #  - LIVEKIT_URL=...           (.env)
+  #  - Environment=LIVEKIT_URL=... (systemd .service)
+  SRC_FILE=""
   while IFS= read -r candidate; do
     [ "$candidate" = "$ENV_FILE" ] && continue
-    if grep -q "^LIVEKIT_URL=" "$candidate" 2>/dev/null; then
-      SRC_ENV="$candidate"
+    if grep -qE "(^|Environment=)LIVEKIT_URL=" "$candidate" 2>/dev/null; then
+      SRC_FILE="$candidate"
       break
     fi
-  done < <(find / -type f -name ".env" 2>/dev/null | grep -v node_modules || true)
+  done < <(grep -rlE "LIVEKIT_URL=" /etc /opt /root /home /var 2>/dev/null | grep -vE "node_modules|.git/|\.log$|/dist/" || true)
 
-  if [ -n "$SRC_ENV" ]; then
-    log "Encontrei credenciais em $SRC_ENV — copiando"
-    LIVEKIT_URL_VAL=$(grep "^LIVEKIT_URL="        "$SRC_ENV" | head -1 | cut -d= -f2-)
-    LIVEKIT_KEY_VAL=$(grep "^LIVEKIT_API_KEY="    "$SRC_ENV" | head -1 | cut -d= -f2-)
-    LIVEKIT_SEC_VAL=$(grep "^LIVEKIT_API_SECRET=" "$SRC_ENV" | head -1 | cut -d= -f2-)
-    set_env LIVEKIT_URL        "$LIVEKIT_URL_VAL"
-    set_env LIVEKIT_API_KEY    "$LIVEKIT_KEY_VAL"
-    set_env LIVEKIT_API_SECRET "$LIVEKIT_SEC_VAL"
+  if [ -n "$SRC_FILE" ]; then
+    log "Encontrei credenciais em $SRC_FILE — copiando"
+    # Extrai os valores cobrindo os dois formatos
+    extract() {
+      grep -oE "(^|Environment=)$1=[^\"']+" "$SRC_FILE" | head -1 | sed "s|.*$1=||" | sed 's/[" ]*$//'
+    }
+    LIVEKIT_URL_VAL=$(extract LIVEKIT_URL)
+    LIVEKIT_KEY_VAL=$(extract LIVEKIT_API_KEY)
+    LIVEKIT_SEC_VAL=$(extract LIVEKIT_API_SECRET)
+    [ -n "$LIVEKIT_URL_VAL" ] && set_env LIVEKIT_URL        "$LIVEKIT_URL_VAL"
+    [ -n "$LIVEKIT_KEY_VAL" ] && set_env LIVEKIT_API_KEY    "$LIVEKIT_KEY_VAL"
+    [ -n "$LIVEKIT_SEC_VAL" ] && set_env LIVEKIT_API_SECRET "$LIVEKIT_SEC_VAL"
+  else
+    warn "Nenhum .env ou .service com LIVEKIT_URL encontrado no sistema."
   fi
 fi
 
