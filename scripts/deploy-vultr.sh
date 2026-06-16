@@ -59,6 +59,12 @@ fi
 log "4) Buildando @wpk/shared (precisa antes do backend)"
 pnpm --filter @wpk/shared build
 
+SHARED_DIST="$APP_DIR/packages/shared/dist/index.js"
+if [ ! -f "$SHARED_DIST" ]; then
+  fail "Build do @wpk/shared não produziu $SHARED_DIST."
+fi
+log "@wpk/shared dist OK: $(ls -la "$SHARED_DIST" | awk '{print $5" bytes"}')"
+
 log "4.1) Buildando backend"
 pnpm --filter @wpk/backend build
 
@@ -67,11 +73,24 @@ if grep -rq "packages/shared/src" "$APP_DIR/apps/backend/dist/" 2>/dev/null; the
   fail "Backend compilado ainda referencia packages/shared/src — algo errado no resolve."
 fi
 
+# Sanity: o symlink do workspace tem que enxergar o dist
+SHARED_LINK="$APP_DIR/apps/backend/node_modules/@wpk/shared/dist/index.js"
+if [ ! -f "$SHARED_LINK" ]; then
+  warn "Symlink workspace não resolve pro dist do @wpk/shared. Reinstalando..."
+  cd "$APP_DIR"
+  rm -rf apps/backend/node_modules/@wpk
+  pnpm install --frozen-lockfile
+  if [ ! -f "$SHARED_LINK" ]; then
+    fail "@wpk/shared/dist não visível em $SHARED_LINK mesmo após reinstall."
+  fi
+fi
+log "@wpk/shared linkado no backend OK"
+
 log "5) Garantindo storage em $STORAGE_DIR"
 mkdir -p "$STORAGE_DIR/recordings"
 chmod -R u+rwX "$STORAGE_DIR"
 
-log "6) Atualizando .env (preserva LIVEKIT_*)"
+log "6) Configurando .env (auto-descobre LIVEKIT_* se já existir em outro lugar)"
 ENV_FILE="$APP_DIR/apps/backend/.env"
 touch "$ENV_FILE"
 
@@ -84,12 +103,49 @@ set_env() {
   fi
 }
 
+# Procura LIVEKIT_* em qualquer .env do sistema se nosso ENV_FILE ainda não tem
+if ! grep -q "^LIVEKIT_URL=" "$ENV_FILE" 2>/dev/null; then
+  log "Procurando LIVEKIT_* em .env antigos..."
+  SRC_ENV=""
+  while IFS= read -r candidate; do
+    [ "$candidate" = "$ENV_FILE" ] && continue
+    if grep -q "^LIVEKIT_URL=" "$candidate" 2>/dev/null; then
+      SRC_ENV="$candidate"
+      break
+    fi
+  done < <(find / -type f -name ".env" 2>/dev/null | grep -v node_modules || true)
+
+  if [ -n "$SRC_ENV" ]; then
+    log "Encontrei credenciais em $SRC_ENV — copiando"
+    LIVEKIT_URL_VAL=$(grep "^LIVEKIT_URL="        "$SRC_ENV" | head -1 | cut -d= -f2-)
+    LIVEKIT_KEY_VAL=$(grep "^LIVEKIT_API_KEY="    "$SRC_ENV" | head -1 | cut -d= -f2-)
+    LIVEKIT_SEC_VAL=$(grep "^LIVEKIT_API_SECRET=" "$SRC_ENV" | head -1 | cut -d= -f2-)
+    set_env LIVEKIT_URL        "$LIVEKIT_URL_VAL"
+    set_env LIVEKIT_API_KEY    "$LIVEKIT_KEY_VAL"
+    set_env LIVEKIT_API_SECRET "$LIVEKIT_SEC_VAL"
+  fi
+fi
+
 set_env STORAGE_PATH "$STORAGE_DIR"
 set_env STREAMER_MANDIOCA_KEY "$STREAMER_KEY"
 
 # Defaults só se ainda não existirem (pra não sobrescrever produção).
 grep -q "^PORT="            "$ENV_FILE" || echo "PORT=${BACKEND_PORT}" >> "$ENV_FILE"
 grep -q "^ALLOWED_ORIGINS=" "$ENV_FILE" || echo "ALLOWED_ORIGINS=https://watch-party-kick.vercel.app" >> "$ENV_FILE"
+
+# Validação: as 3 keys do LiveKit têm que estar presentes
+for key in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
+  if ! grep -q "^${key}=." "$ENV_FILE"; then
+    warn "Faltando ${key} no .env."
+    warn "Cole as 3 linhas no arquivo: nano ${ENV_FILE}"
+    warn "Adicione (substituindo pelos valores reais):"
+    warn "  LIVEKIT_URL=wss://seu-livekit-url"
+    warn "  LIVEKIT_API_KEY=APIWPK001"
+    warn "  LIVEKIT_API_SECRET=watchpartykicksecret2026..."
+    fail "Sem credenciais LIVEKIT_*, backend não sobe."
+  fi
+done
+log ".env validado — LIVEKIT_* presentes"
 
 log "7) Matando qualquer processo legacy na porta ${BACKEND_PORT}"
 # Pega PIDs (exceto o nosso service) e mata. Se nada estiver lá, segue.
