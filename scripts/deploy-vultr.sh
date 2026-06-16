@@ -110,13 +110,18 @@ if ! grep -q "^LIVEKIT_URL=" "$ENV_FILE" 2>/dev/null; then
   #  - LIVEKIT_URL=...           (.env)
   #  - Environment=LIVEKIT_URL=... (systemd .service)
   SRC_FILE=""
+  # Restringe busca a .env / .env.* / *.service. NÃO escaneia scripts/sources
+  # pra evitar falsos positivos com strings de doc.
   while IFS= read -r candidate; do
     [ "$candidate" = "$ENV_FILE" ] && continue
     if grep -qE "(^|Environment=)LIVEKIT_URL=" "$candidate" 2>/dev/null; then
       SRC_FILE="$candidate"
       break
     fi
-  done < <(grep -rlE "LIVEKIT_URL=" /etc /opt /root /home /var 2>/dev/null | grep -vE "node_modules|.git/|\.log$|/dist/" || true)
+  done < <(find /etc/systemd /opt /root /home /var \
+            -type f \
+            \( -name ".env" -o -name ".env.*" -o -name "*.service" \) \
+            2>/dev/null | grep -v ".env.example" || true)
 
   if [ -n "$SRC_FILE" ]; then
     log "Encontrei credenciais em $SRC_FILE — copiando"
