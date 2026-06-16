@@ -11,6 +11,8 @@ const schema = z.object({
   LIVEKIT_URL: z.string().url(),
   LIVEKIT_API_KEY: z.string().min(1),
   LIVEKIT_API_SECRET: z.string().min(1),
+  STORAGE_PATH: z.string().default("./data"),
+  STREAMER_MANDIOCA_KEY: z.string().min(8).default("mandioca-mvp-key-change-me"),
 });
 
 const parsed = schema.safeParse(process.env);
@@ -29,4 +31,8 @@ export const config = {
     apiKey: parsed.data.LIVEKIT_API_KEY,
     apiSecret: parsed.data.LIVEKIT_API_SECRET,
   },
+  storagePath: parsed.data.STORAGE_PATH,
+  streamerKeys: {
+    mandioca: parsed.data.STREAMER_MANDIOCA_KEY,
+  } as Record<string, string>,
 };

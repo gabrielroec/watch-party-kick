@@ -2,7 +2,7 @@
   "name": "@wpk/desktop",
   "version": "0.2.0",
   "private": true,
-  "main": "dist/main/index.js",
+  "main": "dist/main/main/index.js",
   "scripts": {
     "dev": "concurrently -k \"pnpm dev:vite\" \"pnpm dev:electron\"",
     "dev:vite": "vite",

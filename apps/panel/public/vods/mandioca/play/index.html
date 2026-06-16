@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tocando · Watch Party</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/vods.css" />
+  </head>
+  <body class="player-page">
+    <main>
+      <header>
+        <a href="/vods/mandioca" class="logo-link">
+          <img src="/icon.png" alt="" width="40" height="40" />
+          <h1>← VODs do mandioca</h1>
+        </a>
+      </header>
+
+      <section class="player-shell">
+        <video id="video" controls preload="metadata" playsinline></video>
+        <div class="player-meta">
+          <h2 id="title">Carregando...</h2>
+          <div id="meta-line" class="lead"></div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/config.js"></script>
+    <script>
+      window.WPK_STREAMER_SLUG = "mandioca";
+    </script>
+    <script src="/vods-player.js"></script>
+  </body>
+</html>

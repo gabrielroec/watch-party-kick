@@ -1,50 +1,86 @@
-// Service worker (MV3). Mantemos leve: so ouve mensagens do popup e repassa
-// pro content script da aba ativa. Assim o popup nao precisa achar a aba
-// sozinho e o content script nao precisa fazer fetch (menos CORS dor de cabeca).
+import { BACKEND_URL, STORAGE_LAST_ROOM, STORAGE_SESSION } from "../config";
 
-import { BACKEND_URL, STORAGE_LAST_ROOM } from "../config";
+let playerWindowId: number | null = null;
 
-// Tipos de mensagens internas da extensao. NAO confundir com WsMessage do backend.
 type ExtMessage =
   | { kind: "join-room"; code: string }
   | { kind: "leave-room" }
   | { kind: "get-last-room" };
 
-type ExtResponse =
-  | { ok: true; data?: unknown }
-  | { ok: false; error: string };
+type ExtResponse = { ok: true; data?: unknown } | { ok: false; error: string };
 
-chrome.runtime.onMessage.addListener((msg: ExtMessage, _sender, sendResponse) => {
-  (async () => {
+chrome.runtime.onMessage.addListener(
+  (msg: ExtMessage, _sender, sendResponse: (r: ExtResponse) => void) => {
+    handleMessage(msg)
+      .then(sendResponse)
+      .catch((err) => sendResponse({ ok: false, error: err.message }));
+    return true;
+  },
+);
+
+async function handleMessage(msg: ExtMessage): Promise<ExtResponse> {
+  switch (msg.kind) {
+    case "join-room":
+      return joinRoom(msg.code);
+    case "leave-room":
+      return leaveRoom();
+    case "get-last-room":
+      return getLastRoom();
+  }
+}
+
+async function joinRoom(code: string): Promise<ExtResponse> {
+  const response = await fetch(
+    `${BACKEND_URL}/api/rooms/${encodeURIComponent(code)}/join`,
+    { method: "POST" },
+  );
+  if (!response.ok) {
+    return { ok: false, error: `backend ${response.status}` };
+  }
+  const session = await response.json();
+  await chrome.storage.local.set({
+    [STORAGE_LAST_ROOM]: code,
+    [STORAGE_SESSION]: session,
+  });
+  await openPlayerWindow();
+  return { ok: true };
+}
+
+async function leaveRoom(): Promise<ExtResponse> {
+  await chrome.storage.local.remove(STORAGE_SESSION);
+  if (playerWindowId != null) {
+    await chrome.windows.remove(playerWindowId).catch(() => {});
+    playerWindowId = null;
+  }
+  return { ok: true };
+}
+
+async function getLastRoom(): Promise<ExtResponse> {
+  const result = await chrome.storage.local.get(STORAGE_LAST_ROOM);
+  return { ok: true, data: result[STORAGE_LAST_ROOM] ?? null };
+}
+
+async function openPlayerWindow(): Promise<void> {
+  const url = chrome.runtime.getURL("src/player/index.html");
+
+  if (playerWindowId != null) {
     try {
-      if (msg.kind === "join-room") {
-        // Pede token pro backend (chamada HTTP no contexto do SW - sem CORS da Kick).
-        const resp = await fetch(`${BACKEND_URL}/api/rooms/${encodeURIComponent(msg.code)}/join`, {
-          method: "POST",
-        });
-        if (!resp.ok) {
-          sendResponse({ ok: false, error: `backend ${resp.status}` } satisfies ExtResponse);
-          return;
-        }
-        const data = await resp.json();
-        await chrome.storage.local.set({ [STORAGE_LAST_ROOM]: msg.code });
-        // Repassa pro content script da aba ativa (a que chamou o popup).
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id != null) {
-          chrome.tabs.sendMessage(tab.id, { kind: "session", session: data });
-        }
-        sendResponse({ ok: true, data } satisfies ExtResponse);
-      } else if (msg.kind === "leave-room") {
-        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-        if (tab?.id != null) chrome.tabs.sendMessage(tab.id, { kind: "leave" });
-        sendResponse({ ok: true } satisfies ExtResponse);
-      } else if (msg.kind === "get-last-room") {
-        const v = await chrome.storage.local.get(STORAGE_LAST_ROOM);
-        sendResponse({ ok: true, data: v[STORAGE_LAST_ROOM] ?? null } satisfies ExtResponse);
-      }
-    } catch (e) {
-      sendResponse({ ok: false, error: e instanceof Error ? e.message : "erro" } satisfies ExtResponse);
+      await chrome.windows.update(playerWindowId, { focused: true });
+      return;
+    } catch {
+      playerWindowId = null;
     }
-  })();
-  return true; // mantem canal aberto pra resposta async
+  }
+
+  const created = await chrome.windows.create({
+    url,
+    type: "popup",
+    width: 640,
+    height: 400,
+  });
+  playerWindowId = created.id ?? null;
+}
+
+chrome.windows.onRemoved.addListener((id) => {
+  if (id === playerWindowId) playerWindowId = null;
 });

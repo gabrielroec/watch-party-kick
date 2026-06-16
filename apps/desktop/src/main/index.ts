@@ -1,9 +1,13 @@
-import { app, BrowserWindow, ipcMain, desktopCapturer, session } from "electron";
+import { app, BrowserWindow, desktopCapturer, session } from "electron";
 import { join } from "node:path";
+
+app.commandLine.appendSwitch("disable-background-timer-throttling");
+app.commandLine.appendSwitch("disable-renderer-backgrounding");
+app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
 
 const IS_DEV = !app.isPackaged;
 const RENDERER_URL = "http://localhost:5173";
-const RENDERER_FILE = join(__dirname, "../renderer/index.html");
+const RENDERER_FILE = join(__dirname, "../../renderer/index.html");
 
 const createWindow = (): BrowserWindow => {
   const win = new BrowserWindow({
@@ -17,6 +21,8 @@ const createWindow = (): BrowserWindow => {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
     },
   });
 
@@ -30,30 +36,18 @@ const createWindow = (): BrowserWindow => {
   return win;
 };
 
-const registerCaptureHandlers = (): void => {
-  // System picker for screen/window selection. Uses Electron desktopCapturer
-  // which bypasses Chrome's 30fps cap on getDisplayMedia.
+const registerDisplayMediaHandler = (): void => {
+  // System picker for screen/window/tab selection. Bypasses Chrome's
+  // 30fps cap on standard getDisplayMedia for window/screen surfaces.
   session.defaultSession.setDisplayMediaRequestHandler((_req, callback) => {
     desktopCapturer.getSources({ types: ["window", "screen"] }).then((sources) => {
       callback({ video: sources[0], audio: "loopback" });
     });
   }, { useSystemPicker: true });
-
-  ipcMain.handle("capture:list-sources", async () => {
-    const sources = await desktopCapturer.getSources({
-      types: ["window", "screen"],
-      thumbnailSize: { width: 320, height: 180 },
-    });
-    return sources.map((s) => ({
-      id: s.id,
-      name: s.name,
-      thumbnail: s.thumbnail.toDataURL(),
-    }));
-  });
 };
 
 app.whenReady().then(() => {
-  registerCaptureHandlers();
+  registerDisplayMediaHandler();
   createWindow();
 
   app.on("activate", () => {

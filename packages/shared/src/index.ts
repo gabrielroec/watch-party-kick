@@ -32,3 +32,35 @@ export type WsMessage =
   | { type: "host-state"; webcamOn: boolean; micOn: boolean; sourceLabel: string | null }
   | { type: "ping"; t: number }
   | { type: "pong"; t: number };
+
+// Gravações (VODs). Lado streamer chama start -> chunk* -> finish.
+export type RecordingStatus = "recording" | "finished" | "failed";
+
+export interface RecordingMeta {
+  id: string;
+  streamerSlug: string;
+  roomCode: string;
+  title: string | null;
+  startedAt: number;
+  endedAt: number | null;
+  durationMs: number | null;
+  sizeBytes: number;
+  status: RecordingStatus;
+}
+
+export interface StartRecordingRequest {
+  streamerKey: string;
+  streamerSlug: string;
+  roomCode: string;
+  title?: string;
+}
+
+export interface StartRecordingResponse {
+  id: string;
+}
+
+export interface FinishRecordingResponse {
+  id: string;
+  durationMs: number;
+  sizeBytes: number;
+}

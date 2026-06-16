@@ -16,22 +16,28 @@ import { config } from "./config.js";
 import { createRoom, getRoom, makeIdentity } from "./rooms.js";
 import { issueLivekitToken } from "./livekit.js";
 import { attachWebSocketServer } from "./ws.js";
+import { recordingsRouter } from "./recordings.js";
 import type { CreateRoomResponse, JoinRoomResponse } from "@wpk/shared";
 
 const app = express();
-
-app.use(express.json());
 app.use(
   cors({
     origin: (origin, cb) => {
       if (!origin) return cb(null, true);
       if (origin.startsWith("chrome-extension://")) return cb(null, true);
+      if (origin.startsWith("http://localhost")) return cb(null, true);
       if (origin.endsWith(".vercel.app")) return cb(null, true);
       if (config.allowedOrigins.includes(origin)) return cb(null, true);
       cb(new Error(`origin nao permitida: ${origin}`));
     },
   }),
 );
+
+// Rotas de gravação ANTES do express.json() global pra não bufferizar chunks.
+// O router próprio aplica express.json() onde precisa.
+app.use("/api", recordingsRouter);
+
+app.use(express.json());
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, t: Date.now() });

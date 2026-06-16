@@ -3,9 +3,9 @@ import { defineManifest } from "@crxjs/vite-plugin";
 export default defineManifest({
   manifest_version: 3,
   name: "Watch Party",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
-    "Janela flutuante pra assistir junto com seu streamer favorito sobre qualquer página.",
+    "Abre uma janela flutuante pra assistir junto com seu streamer favorito enquanto você navega.",
   action: {
     default_popup: "src/popup/index.html",
     default_title: "Watch Party",
@@ -19,18 +19,15 @@ export default defineManifest({
     service_worker: "src/background/index.ts",
     type: "module",
   },
-  permissions: ["storage", "activeTab", "scripting"],
+  permissions: ["storage"],
   host_permissions: [
     "https://watchpartykick.duckdns.org/*",
     "wss://watchpartykick.duckdns.org/*",
-    "<all_urls>",
   ],
-  content_scripts: [
+  web_accessible_resources: [
     {
+      resources: ["src/player/index.html", "assets/*"],
       matches: ["<all_urls>"],
-      js: ["src/content/index.ts"],
-      run_at: "document_idle",
-      all_frames: false,
     },
   ],
 });

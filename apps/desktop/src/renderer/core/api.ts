@@ -1,7 +1,6 @@
 import type { CreateRoomResponse } from "@wpk/shared";
 import { isCreateRoomResponse } from "@wpk/shared";
-
-const BACKEND_URL = "https://watchpartykick.duckdns.org";
+import { BACKEND_URL } from "./config";
 
 export async function createRoom(code: string): Promise<CreateRoomResponse> {
   const response = await fetch(`${BACKEND_URL}/api/rooms`, {

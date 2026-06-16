@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Watch Party — Assista junto com seu streamer favorito</title>
+    <meta
+      name="description"
+      content="App de desktop pra streamers compartilharem tela em HD 60fps + extensão pros viewers assistirem em uma janela flutuante enquanto navegam."
+    />
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="stylesheet" href="/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="/icon.png" alt="" width="48" height="48" />
+        <h1>Watch Party</h1>
+      </header>
+
+      <section class="hero">
+        <h2>Assista junto com seu streamer favorito.</h2>
+        <p class="lead">
+          Streamers compartilham a tela em HD 60fps por um app de desktop. Você
+          assiste numa janela flutuante que segue navegando com você por
+          qualquer site.
+        </p>
+
+        <div class="actions">
+          <a class="btn primary" id="download-mac" href="#" data-os="mac">
+            <span class="ico">🍎</span>
+            <span>
+              <strong>Baixar pra Mac</strong>
+              <small>.dmg · Apple Silicon &amp; Intel</small>
+            </span>
+          </a>
+          <a class="btn primary" id="download-win" href="#" data-os="win">
+            <span class="ico">⊞</span>
+            <span>
+              <strong>Baixar pra Windows</strong>
+              <small>.exe · Instalador</small>
+            </span>
+          </a>
+        </div>
+
+        <p class="extension-line">
+          Pra assistir, baixe também a
+          <a id="extension-link" href="/watch-party-extension.zip" download>extensão do Chrome</a>.
+        </p>
+      </section>
+
+      <section class="how">
+        <h3>Como funciona</h3>
+        <ol>
+          <li>
+            <strong>Streamer</strong> abre o app, cria uma sala e compartilha
+            tela ou janela.
+          </li>
+          <li>
+            <strong>Você</strong> entra com o código pela extensão. Abre uma
+            janela flutuante que segue com você entre abas.
+          </li>
+          <li>HD em 60fps, com baixa latência, via LiveKit WebRTC.</li>
+        </ol>
+      </section>
+
+      <section class="how">
+        <h3>Como instalar a extensão</h3>
+        <ol>
+          <li>
+            Baixe o
+            <a href="/watch-party-extension.zip" download>watch-party-extension.zip</a>
+            e descompacte numa pasta.
+          </li>
+          <li>No Chrome, abra <code>chrome://extensions</code>.</li>
+          <li>Ative <strong>Modo de desenvolvedor</strong> (canto superior direito).</li>
+          <li>
+            Clique em <strong>Carregar sem compactação</strong> e selecione a pasta descompactada.
+          </li>
+        </ol>
+      </section>
+
+      <section class="how">
+        <h3>Acervo de VODs</h3>
+        <p class="extension-line">
+          <a href="/vods/mandioca">Lives do mandioca →</a>
+        </p>
+      </section>
+
+      <footer>
+        <span>© Watch Party</span>
+        <a href="mailto:ops@tharpventures.com">Contato</a>
+      </footer>
+    </main>
+
+    <script src="/config.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

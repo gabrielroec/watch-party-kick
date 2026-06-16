@@ -1,32 +1,11 @@
-import type { CaptureSource } from "../../preload";
-
-declare global {
-  interface Window {
-    wpk: {
-      listSources: () => Promise<CaptureSource[]>;
-    };
-  }
-}
-
-export async function listCaptureSources(): Promise<CaptureSource[]> {
-  return window.wpk.listSources();
-}
-
-export async function captureSource(sourceId: string, withAudio: boolean): Promise<MediaStream> {
-  return navigator.mediaDevices.getUserMedia({
-    audio: withAudio
-      ? ({ mandatory: { chromeMediaSource: "desktop" } } as MediaTrackConstraints)
-      : false,
+export async function captureScreen(withAudio: boolean): Promise<MediaStream> {
+  return navigator.mediaDevices.getDisplayMedia({
     video: {
-      mandatory: {
-        chromeMediaSource: "desktop",
-        chromeMediaSourceId: sourceId,
-        maxWidth: 1920,
-        maxHeight: 1080,
-        maxFrameRate: 60,
-        minFrameRate: 60,
-      },
-    } as MediaTrackConstraints,
+      frameRate: { ideal: 60, max: 60 },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+    },
+    audio: withAudio,
   });
 }
 
@@ -41,4 +20,13 @@ export async function captureWebcam(): Promise<MediaStream> {
   });
 }
 
-export type { CaptureSource };
+export async function captureMic(): Promise<MediaStream> {
+  return navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    },
+    video: false,
+  });
+}

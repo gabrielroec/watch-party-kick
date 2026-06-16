@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VODs do mandioca · Watch Party</title>
+    <link rel="icon" type="image/png" href="/icon.png" />
+    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="/vods.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <a href="/" class="logo-link">
+          <img src="/icon.png" alt="" width="40" height="40" />
+          <h1>Watch Party</h1>
+        </a>
+      </header>
+
+      <section class="hero">
+        <h2>VODs do <span class="accent">mandioca</span></h2>
+        <p class="lead">Gravações das lives, organizadas pela mais recente.</p>
+      </section>
+
+      <section id="list" class="vods-list">
+        <p class="loading">Carregando...</p>
+      </section>
+    </main>
+
+    <script src="/config.js"></script>
+    <script>
+      window.WPK_STREAMER_SLUG = "mandioca";
+    </script>
+    <script src="/vods-list.js"></script>
+  </body>
+</html>
