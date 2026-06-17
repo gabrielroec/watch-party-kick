@@ -29,6 +29,12 @@ db.exec(`
     ON recordings(streamer_slug, started_at DESC);
 `);
 
+// Migration: add mime_type column if it doesn't exist (forward-compat).
+const cols = db.prepare("PRAGMA table_info(recordings)").all() as Array<{ name: string }>;
+if (!cols.some((c) => c.name === "mime_type")) {
+  db.exec(`ALTER TABLE recordings ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'video/webm'`);
+}
+
 interface RecordingRow {
   id: string;
   streamer_slug: string;
@@ -39,6 +45,7 @@ interface RecordingRow {
   ended_at: number | null;
   size_bytes: number;
   status: RecordingStatus;
+  mime_type: string;
 }
 
 const rowToMeta = (r: RecordingRow): RecordingMeta => ({
@@ -51,11 +58,12 @@ const rowToMeta = (r: RecordingRow): RecordingMeta => ({
   durationMs: r.ended_at ? r.ended_at - r.started_at : null,
   sizeBytes: r.size_bytes,
   status: r.status,
+  mimeType: r.mime_type,
 });
 
 const insertStmt = db.prepare(`
-  INSERT INTO recordings (id, streamer_slug, room_code, title, filename, started_at, status)
-  VALUES (@id, @streamer_slug, @room_code, @title, @filename, @started_at, 'recording')
+  INSERT INTO recordings (id, streamer_slug, room_code, title, filename, started_at, status, mime_type)
+  VALUES (@id, @streamer_slug, @room_code, @title, @filename, @started_at, 'recording', @mime_type)
 `);
 
 const findStmt = db.prepare(`SELECT * FROM recordings WHERE id = ?`);
@@ -81,6 +89,7 @@ export interface InsertRecordingParams {
   title: string | null;
   filename: string;
   startedAt: number;
+  mimeType: string;
 }
 
 export function insertRecording(p: InsertRecordingParams): void {
@@ -91,6 +100,7 @@ export function insertRecording(p: InsertRecordingParams): void {
     title: p.title,
     filename: p.filename,
     started_at: p.startedAt,
+    mime_type: p.mimeType,
   });
 }
 

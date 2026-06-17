@@ -208,23 +208,21 @@ export function App() {
       }
       return;
     }
-    if (!screenStream || !session) {
+    if (!screenStream || !compositorRef.current || !session) {
       setError("Compartilhe a tela primeiro");
       return;
     }
     setBusy("recording");
     setError(null);
     try {
-      // Áudio do VOD nesta versão: mic direto (clonado).
-      // Tentamos mixer (screen+mic) em 4 variações e sempre dava 0 bytes —
-      // MediaRecorder do Electron 33 não come a track de saída do
-      // MediaStreamAudioDestinationNode junto com vídeo. Pragmático: só mic
-      // direto vai pro VOD por ora. Screen audio no VOD fica pra v2.
+      // V9: tenta canvas composite (com webcam PiP) novamente, mas agora
+      // o recorder prioriza H.264 (avc1) em vez de VP9 — Chromium 130 tem
+      // stall conhecido no VP9 com frames de canvas timed via JS.
+      // Stream nova do canvas (não a do publisher) pra evitar single-sink.
+      const recordVideoStream = compositorRef.current.createConsumerStream();
+
       const micTrack = micStream?.getAudioTracks()[0];
-      const screenAudio = screenStream.getAudioTracks()[0];
-      console.log("[wpk-app] recording audio sources:", {
-        hasScreenAudio: !!screenAudio,
-        screenAudioLabel: screenAudio?.label,
+      console.log("[wpk-app] recording sources:", {
         hasMicAudio: !!micTrack,
         micAudioLabel: micTrack?.label,
       });
@@ -235,7 +233,7 @@ export function App() {
         streamerSlug: STREAMER_SLUG,
         streamerKey: STREAMER_KEY,
         roomCode: session.roomCode,
-        videoStream: screenStream,
+        videoStream: recordVideoStream,
         audioTrack: recordAudio,
         onUploadError: (msg) => setError(`gravação: ${msg}`),
       });

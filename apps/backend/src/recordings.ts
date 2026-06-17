@@ -9,6 +9,7 @@ import {
   existsSync,
   mkdirSync,
   statSync,
+  unlinkSync,
 } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -24,7 +25,6 @@ import {
   insertRecording,
   listRecordingsByStreamer,
 } from "./db.js";
-import { unlinkSync } from "node:fs";
 import type {
   FinishRecordingResponse,
   StartRecordingResponse,
@@ -59,7 +59,19 @@ const startSchema = z.object({
   streamerSlug: slugSchema,
   roomCode: z.string().min(3).max(12),
   title: z.string().max(120).optional(),
+  mimeType: z.string().max(120).optional(),
 });
+
+function extensionForMime(mime: string): string {
+  if (mime.startsWith("video/mp4")) return "mp4";
+  if (mime.startsWith("video/webm")) return "webm";
+  if (mime.startsWith("video/x-matroska")) return "mkv";
+  return "webm";
+}
+
+function filenameForExt(slug: string, id: string, ext: string): string {
+  return join(slug, `${id}.${ext}`);
+}
 
 router.post("/recordings/start", jsonParser, (req: Request, res: Response) => {
   const parsed = startSchema.safeParse(req.body);
@@ -67,14 +79,16 @@ router.post("/recordings/start", jsonParser, (req: Request, res: Response) => {
     res.status(400).json({ error: "payload invalido" });
     return;
   }
-  const { streamerKey, streamerSlug, roomCode, title } = parsed.data;
+  const { streamerKey, streamerSlug, roomCode, title, mimeType } = parsed.data;
   if (!validateStreamerKey(streamerSlug, streamerKey)) {
     res.status(401).json({ error: "streamer key invalida" });
     return;
   }
 
+  const finalMime = mimeType ?? "video/webm";
   const id = randomUUID();
-  const filename = filenameFor(streamerSlug, id);
+  const ext = extensionForMime(finalMime);
+  const filename = filenameForExt(streamerSlug, id, ext);
   mkdirSync(join(RECORDINGS_DIR, streamerSlug), { recursive: true });
 
   insertRecording({
@@ -84,6 +98,7 @@ router.post("/recordings/start", jsonParser, (req: Request, res: Response) => {
     title: title ?? null,
     filename,
     startedAt: Date.now(),
+    mimeType: finalMime,
   });
 
   const stream = createWriteStream(absolutePath(filename));
@@ -262,7 +277,10 @@ router.get("/recordings/:id/stream", (req: Request, res: Response) => {
   }
   const total = statSync(path).size;
   const range = req.headers.range;
-  res.setHeader("Content-Type", "video/webm");
+  // Pega mime salvo no DB pra servir com o Content-Type correto.
+  // Chrome aceita H.264-in-WebM mas Firefox/Safari só pegam o áudio.
+  // Usar video/mp4 quando disponível garante playback universal.
+  res.setHeader("Content-Type", rec.mimeType || "video/webm");
   res.setHeader("Accept-Ranges", "bytes");
 
   if (!range) {

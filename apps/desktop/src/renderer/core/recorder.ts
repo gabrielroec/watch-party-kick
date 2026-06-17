@@ -5,13 +5,21 @@
 import type { StartRecordingResponse, FinishRecordingResponse } from "@wpk/shared";
 
 const TIMESLICE_MS = 2000;
+// Prioridade: MP4 (universal) > H.264-em-WebM (só Chromium) > VP9 (broken pelo
+// stall do libvpx VP9 em Chromium 130 com frames de canvas timed via JS).
+// Chromium 130+ suporta MediaRecorder produzindo MP4 fragmentado nativamente.
 const MIME_PRIORITY = [
-  'video/webm; codecs="vp9,opus"',
+  'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+  'video/mp4; codecs="avc1.42E01F,mp4a.40.2"',
+  'video/mp4',
+  'video/webm; codecs="avc1.640028,opus"',
+  'video/webm; codecs="avc1,opus"',
   'video/webm; codecs="vp8,opus"',
+  'video/webm; codecs="vp9,opus"',
   "video/webm",
 ];
 
-const RECORDER_VERSION = "v8-raw-video-mic-direct";
+const RECORDER_VERSION = "v10-mp4-cross-browser";
 const log = (...args: unknown[]) => console.log(`[wpk-rec ${RECORDER_VERSION}]`, ...args);
 const errLog = (...args: unknown[]) => console.error(`[wpk-rec ${RECORDER_VERSION}]`, ...args);
 log("recorder module loaded");
@@ -47,6 +55,18 @@ export interface ActiveRecording {
 export async function startRecording(cfg: RecorderConfig): Promise<ActiveRecording> {
   log("startRecording chamado", { room: cfg.roomCode, slug: cfg.streamerSlug });
 
+  // Decide o codec ANTES de chamar o backend pra mandar o mimeType junto.
+  // Backend usa isso pra escolher extensão do arquivo e Content-Type.
+  [
+    'video/mp4; codecs="avc1.640028,mp4a.40.2"',
+    'video/mp4',
+    'video/webm; codecs="avc1.640028,opus"',
+    'video/webm; codecs="vp9,opus"',
+  ].forEach((m) => log("isTypeSupported", m, "=>", MediaRecorder.isTypeSupported(m)));
+
+  const mimeType = pickMimeType();
+  log("mimeType final pro recording:", mimeType || "(default)");
+
   const startResp = await fetch(`${cfg.backendUrl}/api/recordings/start`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -55,6 +75,7 @@ export async function startRecording(cfg: RecorderConfig): Promise<ActiveRecordi
       streamerSlug: cfg.streamerSlug,
       roomCode: cfg.roomCode,
       title: cfg.title,
+      mimeType: mimeType || undefined,
     }),
   });
   if (!startResp.ok) {
@@ -90,11 +111,17 @@ export async function startRecording(cfg: RecorderConfig): Promise<ActiveRecordi
   if (cfg.audioTrack) composite.addTrack(cfg.audioTrack);
   log("composite stream tracks:", composite.getTracks().length);
 
-  const mimeType = pickMimeType();
-  const recorder = new MediaRecorder(
-    composite,
-    mimeType ? { mimeType, videoBitsPerSecond: 6_000_000 } : { videoBitsPerSecond: 6_000_000 },
-  );
+  // mimeType já foi decidido lá em cima (antes do start). Reusa aqui.
+  const recorderOpts: MediaRecorderOptions & { videoKeyFrameIntervalDuration?: number } = mimeType
+    ? {
+        mimeType,
+        videoBitsPerSecond: 6_000_000,
+        audioBitsPerSecond: 128_000,
+        videoKeyFrameIntervalDuration: 2000,
+      }
+    : { videoBitsPerSecond: 6_000_000, audioBitsPerSecond: 128_000 };
+  log("MediaRecorder opts:", recorderOpts);
+  const recorder = new MediaRecorder(composite, recorderOpts);
 
   let chunkCount = 0;
   let totalBytes = 0;

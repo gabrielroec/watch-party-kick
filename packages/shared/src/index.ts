@@ -46,6 +46,7 @@ export interface RecordingMeta {
   durationMs: number | null;
   sizeBytes: number;
   status: RecordingStatus;
+  mimeType: string;
 }
 
 export interface StartRecordingRequest {
@@ -53,6 +54,7 @@ export interface StartRecordingRequest {
   streamerSlug: string;
   roomCode: string;
   title?: string;
+  mimeType?: string;
 }
 
 export interface StartRecordingResponse {
