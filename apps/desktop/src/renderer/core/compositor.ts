@@ -19,6 +19,9 @@ export interface CompositorLayout {
 
 export interface Compositor {
   outputStream: MediaStream;
+  // Cria uma NOVA stream do mesmo canvas. Cada consumidor (publisher, recorder)
+  // deve receber a sua pra evitar conflito de "single sink" do Chromium.
+  createConsumerStream: () => MediaStream;
   setScreen: (stream: MediaStream | null) => void;
   setWebcam: (stream: MediaStream | null) => void;
   setLayout: (layout: CompositorLayout) => void;
@@ -29,7 +32,11 @@ export function createCompositor(): Compositor {
   const canvas = document.createElement("canvas");
   canvas.width = CANVAS_WIDTH;
   canvas.height = CANVAS_HEIGHT;
-  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+  // NÃO usar { desynchronized: true } — esse flag faz o canvas usar overlay
+  // de baixa latência que bypassa o pipeline de composição. Resultado:
+  // canvas.captureStream() não recebe frames e MediaRecorder fica esperando
+  // um primeiro frame pra sempre.
+  const ctx = canvas.getContext("2d", { alpha: false });
   if (!ctx) throw new Error("2d context unavailable");
 
   const screenVideo = makeHiddenVideo();
@@ -46,6 +53,11 @@ export function createCompositor(): Compositor {
 
   const tick = (): void => {
     if (!running) return;
+    // Always dirty the backing store so canvas.captureStream pushes a frame this
+    // tick, mesmo antes das sources carregarem metadata. Sem isso o
+    // MediaRecorder.start() pode esperar um primeiro frame que nunca chega.
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
     drawScreen(ctx, screenVideo, screenActive);
     drawWebcamPip(ctx, webcamVideo, webcamActive, layout);
 
@@ -57,13 +69,19 @@ export function createCompositor(): Compositor {
   tick();
 
   const outputStream = canvas.captureStream(60);
+  const consumerStreams: MediaStream[] = [outputStream];
 
   return {
     outputStream,
+    createConsumerStream: () => {
+      const s = canvas.captureStream(60);
+      consumerStreams.push(s);
+      return s;
+    },
     setScreen: (stream) => {
       if (stream) {
         screenVideo.srcObject = stream;
-        screenVideo.play().catch(() => {});
+        screenVideo.play().catch((err) => console.warn("[compositor] screen play() failed", err));
         screenActive = true;
       } else {
         screenVideo.srcObject = null;
@@ -73,7 +91,7 @@ export function createCompositor(): Compositor {
     setWebcam: (stream) => {
       if (stream) {
         webcamVideo.srcObject = stream;
-        webcamVideo.play().catch(() => {});
+        webcamVideo.play().catch((err) => console.warn("[compositor] webcam play() failed", err));
         webcamActive = true;
       } else {
         webcamVideo.srcObject = null;
@@ -84,7 +102,8 @@ export function createCompositor(): Compositor {
     stop: () => {
       running = false;
       if (timerId != null) clearTimeout(timerId);
-      outputStream.getTracks().forEach((t) => t.stop());
+      consumerStreams.forEach((s) => s.getTracks().forEach((t) => t.stop()));
+      consumerStreams.length = 0;
       screenVideo.srcObject = null;
       webcamVideo.srcObject = null;
     },

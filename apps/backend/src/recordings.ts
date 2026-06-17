@@ -16,6 +16,7 @@ import { z } from "zod";
 import { config } from "./config.js";
 import {
   bumpSize,
+  deleteRecording,
   failRecording,
   findRecording,
   findRecordingFilename,
@@ -23,6 +24,7 @@ import {
   insertRecording,
   listRecordingsByStreamer,
 } from "./db.js";
+import { unlinkSync } from "node:fs";
 import type {
   FinishRecordingResponse,
   StartRecordingResponse,
@@ -190,6 +192,35 @@ router.post("/recordings/:id/abort", (req: Request, res: Response) => {
     openWriters.delete(id);
   }
   failRecording(id);
+  res.status(204).end();
+});
+
+// Apaga DB row + .webm em disco. Requer auth do streamer.
+router.delete("/recordings/:id", (req: Request, res: Response) => {
+  const id = req.params.id;
+  const slugHeader = req.header("x-streamer-slug");
+  const keyHeader = req.header("x-streamer-key");
+
+  const rec = findRecording(id);
+  if (!rec) {
+    res.status(404).json({ error: "gravacao nao encontrada" });
+    return;
+  }
+  if (slugHeader !== rec.streamerSlug || !validateStreamerKey(rec.streamerSlug, keyHeader)) {
+    res.status(401).json({ error: "auth invalida" });
+    return;
+  }
+
+  const filename = findRecordingFilename(id);
+  const writer = openWriters.get(id);
+  if (writer) {
+    writer.end();
+    openWriters.delete(id);
+  }
+  if (filename) {
+    try { unlinkSync(absolutePath(filename)); } catch { /* ignore */ }
+  }
+  deleteRecording(id);
   res.status(204).end();
 });
 

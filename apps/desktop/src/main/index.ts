@@ -23,6 +23,7 @@ const createWindow = (): BrowserWindow => {
       nodeIntegration: false,
       sandbox: false,
       backgroundThrottling: false,
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
 

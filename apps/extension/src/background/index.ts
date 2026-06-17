@@ -76,7 +76,7 @@ async function openPlayerWindow(): Promise<void> {
     url,
     type: "popup",
     width: 640,
-    height: 400,
+    height: 360,
   });
   playerWindowId = created.id ?? null;
 }

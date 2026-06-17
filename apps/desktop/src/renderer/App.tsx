@@ -90,19 +90,34 @@ export function App() {
         const mixer = ensureAudioMixer();
         if (stream.getAudioTracks().length > 0) {
           mixer.addSource("screen", stream);
+        } else {
+          setError("Atenção: você não compartilhou o áudio do PC. No próximo picker, marque 'Compartilhar áudio'.");
         }
         await publisher.publishAudio(mixer.outputTrack);
       }
 
       setScreenStream(stream);
       setPreviewStream(compositor.outputStream);
+
+      // Auto-liga mic na hora do share. Streamer quase sempre quer o mic on.
+      // Se ele quiser mudo, clica em "🎙️ Mic ON" pra desligar.
+      if (!micStream) {
+        try {
+          const mic = await captureMic();
+          audioMixerRef.current?.addSource("mic", mic);
+          setMicStream(mic);
+          console.log("[wpk-app] mic auto-enabled");
+        } catch (e) {
+          console.warn("[wpk-app] mic auto-enable failed:", e);
+        }
+      }
     } catch (err) {
       console.error("[app] screen share failed", err);
       setError(err instanceof Error ? err.message : "erro ao iniciar tela");
     } finally {
       setBusy(null);
     }
-  }, [screenStream, corner, size, ensureAudioMixer]);
+  }, [screenStream, micStream, corner, size, ensureAudioMixer]);
 
   const stopScreenShare = useCallback(() => {
     if (recordingRef.current) {
@@ -193,20 +208,36 @@ export function App() {
       }
       return;
     }
-    if (!compositorRef.current || !audioMixerRef.current || !session) {
+    if (!screenStream || !session) {
       setError("Compartilhe a tela primeiro");
       return;
     }
     setBusy("recording");
     setError(null);
     try {
+      // Áudio do VOD nesta versão: mic direto (clonado).
+      // Tentamos mixer (screen+mic) em 4 variações e sempre dava 0 bytes —
+      // MediaRecorder do Electron 33 não come a track de saída do
+      // MediaStreamAudioDestinationNode junto com vídeo. Pragmático: só mic
+      // direto vai pro VOD por ora. Screen audio no VOD fica pra v2.
+      const micTrack = micStream?.getAudioTracks()[0];
+      const screenAudio = screenStream.getAudioTracks()[0];
+      console.log("[wpk-app] recording audio sources:", {
+        hasScreenAudio: !!screenAudio,
+        screenAudioLabel: screenAudio?.label,
+        hasMicAudio: !!micTrack,
+        micAudioLabel: micTrack?.label,
+      });
+      const recordAudio = micTrack ? micTrack.clone() : null;
+
       const active = await startRecording({
         backendUrl: BACKEND_URL,
         streamerSlug: STREAMER_SLUG,
         streamerKey: STREAMER_KEY,
         roomCode: session.roomCode,
-        videoStream: compositorRef.current.outputStream,
-        audioTrack: audioMixerRef.current.outputTrack,
+        videoStream: screenStream,
+        audioTrack: recordAudio,
+        onUploadError: (msg) => setError(`gravação: ${msg}`),
       });
       recordingRef.current = active;
       setRecording(true);
@@ -216,7 +247,7 @@ export function App() {
     } finally {
       setBusy(null);
     }
-  }, [recording, session]);
+  }, [recording, session, screenStream, micStream]);
 
   useEffect(() => {
     compositorRef.current?.setLayout({ corner, size });

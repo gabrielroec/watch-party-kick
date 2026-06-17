@@ -72,6 +72,7 @@ const finishStmt = db.prepare(
   `UPDATE recordings SET status = 'finished', ended_at = ? WHERE id = ?`,
 );
 const failStmt = db.prepare(`UPDATE recordings SET status = 'failed' WHERE id = ?`);
+const deleteStmt = db.prepare(`DELETE FROM recordings WHERE id = ?`);
 
 export interface InsertRecordingParams {
   id: string;
@@ -118,4 +119,8 @@ export function finishRecording(id: string, endedAt: number): void {
 
 export function failRecording(id: string): void {
   failStmt.run(id);
+}
+
+export function deleteRecording(id: string): void {
+  deleteStmt.run(id);
 }
