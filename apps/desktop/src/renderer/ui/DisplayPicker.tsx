@@ -1,25 +1,5 @@
 import { useEffect, useState } from "react";
-
-interface DisplaySource {
-  id: string;
-  name: string;
-  display_id: string;
-  thumbnail: string;
-  appIcon: string | null;
-}
-
-declare global {
-  interface Window {
-    wpk?: {
-      picker: {
-        onShow: (cb: (sources: DisplaySource[]) => void) => () => void;
-        select: (id: string | null) => void;
-      };
-      getVersion: () => Promise<string>;
-      openExternal: (url: string) => Promise<void>;
-    };
-  }
-}
+import type { DisplaySource } from "../wpk";
 
 type Tab = "screens" | "windows";
 

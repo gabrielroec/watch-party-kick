@@ -1,6 +1,6 @@
 {
   "name": "@wpk/desktop",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "private": true,
   "main": "dist/main/main/index.js",
   "scripts": {
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@wpk/shared": "workspace:*",
+    "electron-updater": "^6.3.9",
     "livekit-client": "^2.7.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -42,10 +43,17 @@
       "dist/**/*"
     ],
     "npmRebuild": false,
+    "artifactName": "Watch-Party-${platform}-${arch}.${ext}",
+    "publish": {
+      "provider": "github",
+      "owner": "gabrielroec",
+      "repo": "watch-party-kick"
+    },
     "mac": {
       "category": "public.app-category.entertainment",
       "target": [
-        { "target": "dmg", "arch": ["arm64", "x64"] }
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
       ],
       "identity": null
     },
@@ -54,6 +62,11 @@
     },
     "win": {
       "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
     },
     "linux": {
       "target": "AppImage"

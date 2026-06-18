@@ -31,7 +31,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        # versão vem do "packageManager" do package.json raiz
 
       - uses: actions/setup-node@v4
         with:
@@ -48,39 +47,22 @@ jobs:
         working-directory: apps/desktop
         run: pnpm build
 
-      - name: Package macOS DMGs
+      - name: Package macOS (DMG + ZIP, yml metadata)
         if: matrix.platform == 'mac'
         working-directory: apps/desktop
         run: pnpm exec electron-builder --mac --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: false
 
-      - name: Package Windows NSIS
+      - name: Package Windows (NSIS + yml metadata)
         if: matrix.platform == 'win'
         working-directory: apps/desktop
         run: pnpm exec electron-builder --win --publish never
 
-      - name: Rename macOS artifacts
-        if: matrix.platform == 'mac'
+      - name: List artifacts
         shell: bash
         working-directory: apps/desktop/release
-        run: |
-          for f in *arm64*.dmg; do mv -f "$f" "Watch-Party-macOS-AppleSilicon.dmg"; done
-          for f in *.dmg; do
-            case "$f" in
-              Watch-Party-macOS-*) ;;
-              *) mv -f "$f" "Watch-Party-macOS-Intel.dmg" ;;
-            esac
-          done
-          ls -la
-
-      - name: Rename Windows artifact
-        if: matrix.platform == 'win'
-        shell: bash
-        working-directory: apps/desktop/release
-        run: |
-          for f in *.exe; do mv -f "$f" "Watch-Party-Windows-Setup.exe"; done
-          ls -la
+        run: ls -la
 
       - name: Resolve target tag
         id: resolve_tag
@@ -92,11 +74,14 @@ jobs:
             echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Upload to release
+      - name: Upload artifacts to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.resolve_tag.outputs.tag }}
           files: |
             apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
             apps/desktop/release/*.exe
+            apps/desktop/release/*.yml
+            apps/desktop/release/*.blockmap
           fail_on_unmatched_files: false

@@ -6,6 +6,7 @@ import {
   session,
   shell,
 } from "electron";
+import { autoUpdater } from "electron-updater";
 import { join } from "node:path";
 
 app.commandLine.appendSwitch("disable-background-timer-throttling");
@@ -112,7 +113,7 @@ const registerVersionHandler = (): void => {
   ipcMain.handle("app:get-version", () => app.getVersion());
 };
 
-// Abre URL externa no browser padrão (pra link de update)
+// Abre URL externa no browser padrão (link genérico, ex: GitHub Release)
 const registerOpenExternalHandler = (): void => {
   ipcMain.handle("app:open-external", async (_e, url: string) => {
     if (typeof url !== "string") return;
@@ -121,11 +122,62 @@ const registerOpenExternalHandler = (): void => {
   });
 };
 
+// Auto-updater via electron-updater. Pega o último release do GitHub,
+// baixa zip (Mac) ou exe (Win) automaticamente, e quando o user confirma
+// reinicia o app já com a versão nova instalada.
+const setupAutoUpdater = (mainWindow: BrowserWindow): void => {
+  if (IS_DEV) {
+    console.log("[updater] dev mode — pulando autoUpdater");
+    return;
+  }
+
+  // Não baixa sozinho; espera o user clicar no badge "Baixar".
+  // (mas a verificação por updates é automática)
+  autoUpdater.autoDownload = false;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowDowngrade = false;
+
+  const send = (channel: string, payload?: unknown): void => {
+    if (mainWindow.isDestroyed()) return;
+    mainWindow.webContents.send(channel, payload);
+  };
+
+  autoUpdater.on("checking-for-update", () => send("updater:checking"));
+  autoUpdater.on("update-available", (info) => send("updater:available", {
+    version: info.version,
+    releaseNotes: info.releaseNotes,
+    releaseDate: info.releaseDate,
+  }));
+  autoUpdater.on("update-not-available", (info) => send("updater:not-available", {
+    version: info.version,
+  }));
+  autoUpdater.on("download-progress", (p) => send("updater:progress", {
+    percent: p.percent,
+    bytesPerSecond: p.bytesPerSecond,
+    transferred: p.transferred,
+    total: p.total,
+  }));
+  autoUpdater.on("update-downloaded", (info) => send("updater:downloaded", {
+    version: info.version,
+  }));
+  autoUpdater.on("error", (err) => send("updater:error", { message: err.message }));
+
+  // IPC do renderer pra controlar o ciclo
+  ipcMain.handle("updater:check", () => autoUpdater.checkForUpdates());
+  ipcMain.handle("updater:download", () => autoUpdater.downloadUpdate());
+  ipcMain.handle("updater:install", () => autoUpdater.quitAndInstall(false, true));
+
+  // Check inicial 5s após abrir e depois a cada 30min
+  setTimeout(() => { void autoUpdater.checkForUpdates().catch(() => {}); }, 5_000);
+  setInterval(() => { void autoUpdater.checkForUpdates().catch(() => {}); }, 30 * 60 * 1000);
+};
+
 app.whenReady().then(() => {
   registerDisplayMediaHandler();
   registerVersionHandler();
   registerOpenExternalHandler();
-  createWindow();
+  const mainWin = createWindow();
+  setupAutoUpdater(mainWin);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
