@@ -6,15 +6,23 @@
     <link rel="stylesheet" href="./player.css" />
   </head>
   <body>
-    <div class="hud">
-      <span class="dot"></span>
-      <span id="status">conectando...</span>
-      <span class="spacer"></span>
-      <span class="stats"><span id="fps">-- FPS</span><span id="ping">-- ms</span></span>
+    <div class="stage">
+      <div class="video-pane">
+        <div class="hud">
+          <span class="dot"></span>
+          <span id="status">conectando...</span>
+          <span class="spacer"></span>
+          <span class="stats"><span id="fps">-- FPS</span><span id="ping">-- ms</span></span>
+        </div>
+        <video id="video" autoplay muted playsinline></video>
+        <audio id="audio" autoplay></audio>
+        <div class="controls">
+          <button id="mute" class="ctl">🔇 Som: OFF</button>
+          <button id="toggle-chat" class="ctl">💬 Chat</button>
+        </div>
+      </div>
+      <aside id="chat-pane" class="chat-pane"></aside>
     </div>
-    <video id="video" autoplay muted playsinline></video>
-    <audio id="audio" autoplay></audio>
-    <button id="mute" class="mute">🔇 Som: OFF</button>
     <script type="module" src="./player.ts"></script>
   </body>
 </html>

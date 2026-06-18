@@ -1,0 +1,10 @@
+node_modules
+.git
+../desktop/release
+../desktop/dist
+../desktop/node_modules
+../extension/dist
+../extension/node_modules
+../backend/dist
+../backend/node_modules
+../backend/data

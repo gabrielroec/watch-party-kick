@@ -1,6 +1,7 @@
 import { Room, RoomEvent, RemoteTrack, Track } from "livekit-client";
 import type { JoinRoomResponse } from "@wpk/shared";
-import { BACKEND_URL, STORAGE_SESSION } from "../config";
+import { BACKEND_URL, STORAGE_SESSION, KICK_CHANNEL } from "../config";
+import { mountKickChat } from "./chat";
 
 const videoEl = document.getElementById("video") as HTMLVideoElement;
 const audioEl = document.getElementById("audio") as HTMLAudioElement;
@@ -8,12 +9,28 @@ const statusEl = document.getElementById("status") as HTMLSpanElement;
 const fpsEl = document.getElementById("fps") as HTMLSpanElement;
 const pingEl = document.getElementById("ping") as HTMLSpanElement;
 const muteBtn = document.getElementById("mute") as HTMLButtonElement;
+const toggleChatBtn = document.getElementById("toggle-chat") as HTMLButtonElement;
+const chatPane = document.getElementById("chat-pane") as HTMLElement;
 
 let audioMuted = true;
 muteBtn.addEventListener("click", () => {
   audioMuted = !audioMuted;
   audioEl.muted = audioMuted;
   muteBtn.textContent = audioMuted ? "🔇 Som: OFF" : "🔊 Som: ON";
+});
+
+// Chat custom: monta o cliente que conecta no SW → Pusher WS da Kick.
+mountKickChat(KICK_CHANNEL, chatPane);
+
+const CHAT_COLLAPSED_KEY = "wpk:chatCollapsed";
+chrome.storage.local.get(CHAT_COLLAPSED_KEY).then((res) => {
+  if (res[CHAT_COLLAPSED_KEY]) chatPane.classList.add("collapsed");
+});
+
+toggleChatBtn.addEventListener("click", () => {
+  const nowCollapsed = !chatPane.classList.contains("collapsed");
+  chatPane.classList.toggle("collapsed", nowCollapsed);
+  chrome.storage.local.set({ [CHAT_COLLAPSED_KEY]: nowCollapsed });
 });
 
 async function loadSession(): Promise<JoinRoomResponse | null> {

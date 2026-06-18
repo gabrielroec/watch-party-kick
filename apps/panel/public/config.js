@@ -1,10 +1,11 @@
-// URLs de download. Atualize quando publicar binários no GitHub Releases.
-// Exemplo:
-//   mac: "https://github.com/<org>/watch-party-kick/releases/latest/download/Watch-Party.dmg",
-//   win: "https://github.com/<org>/watch-party-kick/releases/latest/download/Watch-Party.Setup.exe",
+// URLs de download. /latest/download/<name> sempre aponta pra release mais recente,
+// então não precisa mudar quando publicar v0.2.0, v0.3.0, etc.
 window.WPK_CONFIG = {
   downloads: {
-    mac: "",
+    macAppleSilicon: "https://github.com/gabrielroec/watch-party-kick/releases/latest/download/Watch-Party-macOS-AppleSilicon.dmg",
+    macIntel: "https://github.com/gabrielroec/watch-party-kick/releases/latest/download/Watch-Party-macOS-Intel.dmg",
+    // Windows fica em breve — precisa rodar electron-builder numa máquina Windows
+    // (ou GitHub Actions com worker windows-latest).
     win: "",
   },
   extensionZipUrl: "/watch-party-extension.zip",

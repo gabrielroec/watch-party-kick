@@ -1,0 +1,103 @@
+name: Release Desktop App
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag de release existente (ex: v0.1.0)"
+        required: true
+        default: "v0.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: mac
+          - os: windows-latest
+            platform: win
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Build @wpk/shared
+        run: pnpm --filter @wpk/shared build
+
+      - name: Build desktop renderer + main
+        working-directory: apps/desktop
+        run: pnpm build
+
+      - name: Package macOS DMGs
+        if: matrix.platform == 'mac'
+        working-directory: apps/desktop
+        run: pnpm exec electron-builder --mac --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: false
+
+      - name: Package Windows NSIS
+        if: matrix.platform == 'win'
+        working-directory: apps/desktop
+        run: pnpm exec electron-builder --win --publish never
+
+      - name: Rename macOS artifacts
+        if: matrix.platform == 'mac'
+        shell: bash
+        working-directory: apps/desktop/release
+        run: |
+          for f in *arm64*.dmg; do mv -f "$f" "Watch-Party-macOS-AppleSilicon.dmg"; done
+          for f in *.dmg; do
+            case "$f" in
+              Watch-Party-macOS-*) ;;
+              *) mv -f "$f" "Watch-Party-macOS-Intel.dmg" ;;
+            esac
+          done
+          ls -la
+
+      - name: Rename Windows artifact
+        if: matrix.platform == 'win'
+        shell: bash
+        working-directory: apps/desktop/release
+        run: |
+          for f in *.exe; do mv -f "$f" "Watch-Party-Windows-Setup.exe"; done
+          ls -la
+
+      - name: Resolve target tag
+        id: resolve_tag
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve_tag.outputs.tag }}
+          files: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.exe
+          fail_on_unmatched_files: false

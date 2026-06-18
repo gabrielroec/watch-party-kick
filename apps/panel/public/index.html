@@ -6,7 +6,7 @@
     <title>Watch Party — Assista junto com seu streamer favorito</title>
     <meta
       name="description"
-      content="App de desktop pra streamers compartilharem tela em HD 60fps + extensão pros viewers assistirem em uma janela flutuante enquanto navegam."
+      content="App de desktop pra streamers compartilharem tela em HD 60fps + extensão pros viewers assistirem direto sobre a página da Kick com o chat original do lado."
     />
     <link rel="icon" type="image/png" href="/icon.png" />
     <link rel="stylesheet" href="/style.css" />
@@ -22,22 +22,28 @@
         <h2>Assista junto com seu streamer favorito.</h2>
         <p class="lead">
           Streamers compartilham a tela em HD 60fps por um app de desktop. Você
-          assiste numa janela flutuante que segue navegando com você por
-          qualquer site.
+          assiste direto na página da Kick, com o chat original do lado.
         </p>
 
         <div class="actions">
-          <a class="btn primary" id="download-mac" href="#" data-os="mac">
+          <a class="btn primary" id="download-mac-arm" href="#" data-os="mac-arm">
             <span class="ico">🍎</span>
             <span>
-              <strong>Baixar pra Mac</strong>
-              <small>.dmg · Apple Silicon &amp; Intel</small>
+              <strong>Mac Apple Silicon</strong>
+              <small>.dmg · M1/M2/M3/M4</small>
+            </span>
+          </a>
+          <a class="btn primary" id="download-mac-intel" href="#" data-os="mac-intel">
+            <span class="ico">🍎</span>
+            <span>
+              <strong>Mac Intel</strong>
+              <small>.dmg · Intel x64</small>
             </span>
           </a>
           <a class="btn primary" id="download-win" href="#" data-os="win">
             <span class="ico">⊞</span>
             <span>
-              <strong>Baixar pra Windows</strong>
+              <strong>Windows</strong>
               <small>.exe · Instalador</small>
             </span>
           </a>
@@ -54,13 +60,14 @@
         <ol>
           <li>
             <strong>Streamer</strong> abre o app, cria uma sala e compartilha
-            tela ou janela.
+            tela, janela ou aba (com áudio + microfone).
           </li>
           <li>
-            <strong>Você</strong> entra com o código pela extensão. Abre uma
-            janela flutuante que segue com você entre abas.
+            <strong>Você</strong> vai pra <code>kick.com/canal</code> do streamer,
+            clica na extensão e cola o código. O player aparece sobre a página
+            da Kick com o chat original do lado, totalmente funcional.
           </li>
-          <li>HD em 60fps, com baixa latência, via LiveKit WebRTC.</li>
+          <li>HD 60fps, baixa latência, via LiveKit WebRTC.</li>
         </ol>
       </section>
 

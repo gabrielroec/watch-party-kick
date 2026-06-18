@@ -3,7 +3,7 @@ import { defineManifest } from "@crxjs/vite-plugin";
 export default defineManifest({
   manifest_version: 3,
   name: "Watch Party",
-  version: "0.3.0",
+  version: "0.10.1",
   description:
     "Abre uma janela flutuante pra assistir junto com seu streamer favorito enquanto você navega.",
   action: {
@@ -19,10 +19,32 @@ export default defineManifest({
     service_worker: "src/background/index.ts",
     type: "module",
   },
-  permissions: ["storage"],
+  permissions: ["storage", "cookies", "scripting", "tabs"],
   host_permissions: [
     "https://watchpartykick.duckdns.org/*",
     "wss://watchpartykick.duckdns.org/*",
+    "https://kick.com/*",
+    "https://*.kick.com/*",
+  ],
+  content_scripts: [
+    {
+      matches: ["https://*.kick.com/*"],
+      js: ["src/content/kickTokenSniffer.ts"],
+      run_at: "document_start",
+      world: "MAIN",
+    },
+    {
+      matches: ["https://*.kick.com/*"],
+      js: ["src/content/kickTokenBridge.ts"],
+      run_at: "document_start",
+      world: "ISOLATED",
+    },
+    {
+      matches: ["https://kick.com/*"],
+      js: ["src/content/kickOverlay.ts"],
+      run_at: "document_end",
+      world: "ISOLATED",
+    },
   ],
   web_accessible_resources: [
     {

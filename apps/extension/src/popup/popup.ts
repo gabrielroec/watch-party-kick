@@ -39,8 +39,8 @@ joinBtn.addEventListener("click", () => {
     joinBtn.disabled = false;
     if (r?.ok) {
       statusEl.className = "status ok";
-      statusEl.textContent = "conectado! Abra a aba onde quer assistir.";
-      setTimeout(() => window.close(), 700);
+      statusEl.textContent = "✓ conectado";
+      setTimeout(() => window.close(), 500);
     } else {
       statusEl.className = "status error";
       statusEl.textContent = r?.error ?? "falhou";
