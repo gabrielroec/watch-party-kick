@@ -4,9 +4,13 @@ import {
   LocalVideoTrack,
   LocalAudioTrack,
   Track,
+  AudioPresets,
 } from "livekit-client";
 
-const VIDEO_BITRATE = 8_000_000;
+// Bitrate alvo pra 1080p60 VP9: Twitch recomenda 6-8Mbps, YouTube 9-12Mbps.
+// Vamos no topo (12Mbps) pra ter margem e o encoder não dropar resolução
+// quando tiver cenas com muito movimento.
+const VIDEO_BITRATE = 12_000_000;
 const VIDEO_FRAMERATE = 60;
 
 export interface Publisher {
@@ -29,7 +33,9 @@ export async function connectPublisher(url: string, token: string): Promise<Publ
   let audioSid: string | undefined;
 
   const publishVideo = async (track: MediaStreamTrack): Promise<void> => {
-    track.contentHint = "detail";
+    // "motion" pro encoder usar perfil de vídeo (gameplay, vídeo). "detail"
+    // é pra slides/texto estático e custava mais bitrate em movimento.
+    track.contentHint = "motion";
     const lk = new LocalVideoTrack(track, undefined, false);
     const publication = await room.localParticipant.publishTrack(lk, {
       name: "wpk-screen",
@@ -43,7 +49,9 @@ export async function connectPublisher(url: string, token: string): Promise<Publ
       },
       scalabilityMode: "L1T3",
       simulcast: false,
-      degradationPreference: "maintain-framerate",
+      // "balanced" mantém resolução E framerate quando possível.
+      // "maintain-framerate" antes dropava pra 720p pra segurar 60fps.
+      degradationPreference: "balanced",
     } as any);
     videoSid = publication.trackSid;
     await tuneSender(publication);
@@ -54,8 +62,15 @@ export async function connectPublisher(url: string, token: string): Promise<Publ
     const publication = await room.localParticipant.publishTrack(lk, {
       name: "wpk-screen-audio",
       source: Track.Source.ScreenShareAudio,
-    });
+      // musicHighQuality = 192kbps stereo Opus. Default é "speech" que é
+      // mono 24kbps — bom pra voz mas péssimo pra game audio/música.
+      audioPreset: AudioPresets.musicHighQuality,
+      red: false,
+      dtx: false,
+      stopMicTrackOnMute: false,
+    } as any);
     audioSid = publication.trackSid;
+    await tuneAudioSender(publication);
   };
 
   const unpublishAll = async (): Promise<void> => {
@@ -85,7 +100,7 @@ async function tuneSender(publication: { track?: { sender?: RTCRtpSender } }): P
   const sender = publication.track?.sender;
   if (!sender) return;
   const params = sender.getParameters();
-  params.degradationPreference = "maintain-framerate";
+  params.degradationPreference = "balanced";
   params.encodings?.forEach((enc) => {
     enc.maxBitrate = VIDEO_BITRATE;
     enc.maxFramerate = VIDEO_FRAMERATE;
@@ -93,6 +108,18 @@ async function tuneSender(publication: { track?: { sender?: RTCRtpSender } }): P
     enc.networkPriority = "high";
     (enc as RTCRtpEncodingParameters & { scalabilityMode?: string }).scalabilityMode = "L1T3";
     delete enc.scaleResolutionDownBy;
+  });
+  await sender.setParameters(params);
+}
+
+async function tuneAudioSender(publication: { track?: { sender?: RTCRtpSender } }): Promise<void> {
+  const sender = publication.track?.sender;
+  if (!sender) return;
+  const params = sender.getParameters();
+  params.encodings?.forEach((enc) => {
+    enc.maxBitrate = 192_000;
+    enc.priority = "high";
+    enc.networkPriority = "high";
   });
   await sender.setParameters(params);
 }
