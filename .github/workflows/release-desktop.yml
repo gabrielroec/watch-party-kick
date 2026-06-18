@@ -31,8 +31,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
+        # versão vem do "packageManager" do package.json raiz
 
       - uses: actions/setup-node@v4
         with:
