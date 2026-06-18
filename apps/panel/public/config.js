@@ -4,9 +4,7 @@ window.WPK_CONFIG = {
   downloads: {
     macAppleSilicon: "https://github.com/gabrielroec/watch-party-kick/releases/latest/download/Watch-Party-macOS-AppleSilicon.dmg",
     macIntel: "https://github.com/gabrielroec/watch-party-kick/releases/latest/download/Watch-Party-macOS-Intel.dmg",
-    // Windows fica em breve — precisa rodar electron-builder numa máquina Windows
-    // (ou GitHub Actions com worker windows-latest).
-    win: "",
+    win: "https://github.com/gabrielroec/watch-party-kick/releases/latest/download/Watch-Party-Windows-Setup.exe",
   },
   extensionZipUrl: "/watch-party-extension.zip",
   backendUrl: "https://watchpartykick.duckdns.org",

@@ -17,6 +17,8 @@ import { Preview } from "./ui/Preview";
 import { ControlBar } from "./ui/ControlBar";
 import { WebcamLayout } from "./ui/WebcamLayout";
 import { RoomInfo } from "./ui/RoomInfo";
+import { DisplayPicker } from "./ui/DisplayPicker";
+import { UpdateBadge } from "./ui/UpdateBadge";
 
 type Phase = "idle" | "connecting" | "ready" | "error";
 type Busy = "screen" | "webcam" | "mic" | "recording" | null;
@@ -272,6 +274,7 @@ export function App() {
 
   return (
     <div className="app">
+      <DisplayPicker />
       <div className="header">
         <h1>Watch Party — Streamer</h1>
         <div className="status">
@@ -281,6 +284,7 @@ export function App() {
               <span>Sala <code>{session.roomCode}</code></span>
             </>
           )}
+          <UpdateBadge />
         </div>
       </div>
 
